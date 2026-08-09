@@ -2,23 +2,63 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 ## Getting Started
 
-First, run the development server:
+Copy the environment template and provide the Neon connection string and Better Auth settings:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
+cp .env.example .env
+openssl rand -base64 32
+```
+
+Set the generated value as `BETTER_AUTH_SECRET`, then install dependencies, apply the database migrations, and start the development server:
+
+```bash
+bun install
+bun run db:migrate
 bun dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+The Better Auth handler is mounted at `/api/auth/*`. Unauthenticated workspace routes redirect to `/login`, which signs users in with email and password.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Useful database commands:
+
+```bash
+bun run db:generate
+bun run db:migrate
+bun run db:studio
+```
+
+## POS modules
+
+The authenticated workspace is backed by Neon and includes:
+
+- Inventory catalogue creation, search/filtering, stock metrics, and audited stock adjustments.
+- Registers with open/close shift controls and cash reconciliation.
+- Transactional sale recording that creates receipt lines and inventory movements while preventing negative stock.
+- An overview computed from live sales, product categories, and open register shifts.
+
+Money is stored as integer laari (`1 MVR = 100 laari`) to keep calculations exact.
+
+The POS DDL is kept in [`migration/001_pos_modules.sql`](migration/001_pos_modules.sql) and mirrored in Prisma's migration history. Apply pending migrations with:
+
+```bash
+bunx prisma migrate deploy
+```
+
+## Tests
+
+Run the pure unit suite without a database:
+
+```bash
+bun run test:unit
+```
+
+For the integration suite, set `TEST_NEON_DB` to an isolated Neon branch when possible. The suite creates uniquely named records, verifies atomic sales and rollback behavior, and removes its records afterward:
+
+```bash
+bun run test:integration
+```
 
 ## Learn More
 

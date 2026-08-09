@@ -1,0 +1,213 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id            String              @id
+  name          String
+  email         String
+  emailVerified Boolean             @default(false)
+  image         String?
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+  sessions      Session[]
+  accounts      Account[]
+  openedShifts  RegisterShift[]     @relation("ShiftOpenedBy")
+  closedShifts  RegisterShift[]     @relation("ShiftClosedBy")
+  sales         Sale[]              @relation("SaleCreatedBy")
+  stockChanges  InventoryMovement[]
+
+  @@unique([email])
+  @@map("user")
+}
+
+enum ShiftStatus {
+  OPEN
+  CLOSED
+}
+
+enum SaleStatus {
+  COMPLETED
+  REFUNDED
+  VOIDED
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  MOBILE
+}
+
+enum InventoryMovementType {
+  INITIAL
+  ADJUSTMENT
+  SALE
+  REFUND
+}
+
+model Product {
+  id                String              @id @default(uuid()) @db.Uuid
+  sku               String              @unique
+  barcode           String?             @unique
+  name              String
+  category          String
+  description       String?
+  retailPriceLaari  Int
+  costPriceLaari    Int                 @default(0)
+  stockQuantity     Int                 @default(0)
+  lowStockThreshold Int                 @default(10)
+  active            Boolean             @default(true)
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  saleItems         SaleItem[]
+  stockMovements    InventoryMovement[]
+
+  @@index([active, updatedAt(sort: Desc)])
+  @@index([category])
+  @@map("products")
+}
+
+model CashRegister {
+  id        String          @id @default(uuid()) @db.Uuid
+  code      String          @unique
+  name      String          @unique
+  active    Boolean         @default(true)
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+  shifts    RegisterShift[]
+
+  @@index([active, name])
+  @@map("cash_registers")
+}
+
+model RegisterShift {
+  id               String       @id @default(uuid()) @db.Uuid
+  registerId       String       @db.Uuid
+  openedById       String
+  closedById       String?
+  status           ShiftStatus  @default(OPEN)
+  openingCashLaari Int          @default(0)
+  closingCashLaari Int?
+  openedAt         DateTime     @default(now())
+  closedAt         DateTime?
+  register         CashRegister @relation(fields: [registerId], references: [id], onDelete: Restrict)
+  openedBy         User         @relation("ShiftOpenedBy", fields: [openedById], references: [id], onDelete: Restrict)
+  closedBy         User?        @relation("ShiftClosedBy", fields: [closedById], references: [id], onDelete: Restrict)
+  sales            Sale[]
+
+  @@index([registerId, status, openedAt(sort: Desc)])
+  @@index([openedById])
+  @@index([closedById])
+  @@map("register_shifts")
+}
+
+model Sale {
+  id              String              @id @default(uuid()) @db.Uuid
+  receiptNumber   BigInt              @unique @default(autoincrement())
+  registerShiftId String              @db.Uuid
+  createdById     String
+  status          SaleStatus          @default(COMPLETED)
+  paymentMethod   PaymentMethod
+  subtotalLaari   Int
+  totalLaari      Int
+  createdAt       DateTime            @default(now())
+  refundedAt      DateTime?
+  registerShift   RegisterShift       @relation(fields: [registerShiftId], references: [id], onDelete: Restrict)
+  createdBy       User                @relation("SaleCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  items           SaleItem[]
+  stockMovements  InventoryMovement[]
+
+  @@index([status, createdAt(sort: Desc)])
+  @@index([registerShiftId, createdAt(sort: Desc)])
+  @@index([createdById])
+  @@map("sales")
+}
+
+model SaleItem {
+  id             String  @id @default(uuid()) @db.Uuid
+  saleId         String  @db.Uuid
+  productId      String  @db.Uuid
+  productName    String
+  productSku     String
+  quantity       Int
+  unitPriceLaari Int
+  lineTotalLaari Int
+  sale           Sale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  product        Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@index([saleId])
+  @@index([productId])
+  @@map("sale_items")
+}
+
+model InventoryMovement {
+  id            String                @id @default(uuid()) @db.Uuid
+  productId     String                @db.Uuid
+  saleId        String?               @db.Uuid
+  createdById   String
+  type          InventoryMovementType
+  quantityDelta Int
+  reason        String?
+  createdAt     DateTime              @default(now())
+  product       Product               @relation(fields: [productId], references: [id], onDelete: Restrict)
+  sale          Sale?                 @relation(fields: [saleId], references: [id], onDelete: Restrict)
+  createdBy     User                  @relation(fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([productId, createdAt(sort: Desc)])
+  @@index([saleId])
+  @@index([createdById])
+  @@map("inventory_movements")
+}
+
+model Session {
+  id        String   @id
+  expiresAt DateTime
+  token     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([token])
+  @@index([userId])
+  @@map("session")
+}
+
+model Account {
+  id                    String    @id
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([userId])
+  @@map("account")
+}
+
+model Verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+  @@map("verification")
+}
