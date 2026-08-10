@@ -1,4 +1,5 @@
 import { headers } from "next/headers";
+import Image from "next/image";
 import { redirect } from "next/navigation";
 
 import { LoginForm } from "@/app/login/login-form";
@@ -36,6 +37,14 @@ export default async function LoginPage() {
             One calm workspace for sales, registers, stock, and the people who
             keep everything moving.
           </p>
+          <Image
+            src="/images/login-cat-basket-themed.png"
+            alt="Pixel-art cat awake in a basket, wrapped in a blanket"
+            width={1441}
+            height={1058}
+            preload
+            className="mt-16 h-auto w-full max-w-[288px] select-none [image-rendering:pixelated]"
+          />
         </div>
 
         <div className="flex items-center justify-between border-t border-[#5E5A52] pt-5 font-mono text-xs text-chart-4">
