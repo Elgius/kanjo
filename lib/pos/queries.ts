@@ -3,6 +3,7 @@ import "server-only";
 import type { InventoryMovementType, Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/db";
 import { formatHour, getBusinessDayRange, getMaldivesHour, shiftRange } from "@/lib/pos/dates";
+import { maldivesDate, measuredPerServing, quantityNumber, stockUnitsFromMeasured } from "@/lib/pos/inventory";
 import { fuzzySearchMatches, fuzzySearchScore } from "@/lib/pos/search";
 
 export type InventoryFilters = {
@@ -15,18 +16,22 @@ export type InventoryFilters = {
 };
 
 export async function getInventoryData(filters: InventoryFilters = {}) {
-  const [allProducts, registers] = await Promise.all([
+  const [rawProducts, registers] = await Promise.all([
     prisma.product.findMany({
       where: { active: true },
       orderBy: { updatedAt: "desc" },
-      include: { register: { select: { id: true, code: true, name: true } } },
+      include: { register: { select: { id: true, code: true, name: true, purpose: true } }, batches: { where: { remainingQuantity: { gt: 0 } }, orderBy: { receivedAt: "asc" } } },
     }),
     prisma.cashRegister.findMany({
       where: { active: true },
       orderBy: { name: "asc" },
-      select: { id: true, code: true, name: true },
+      select: { id: true, code: true, name: true, purpose: true },
     }),
   ]);
+  const allProducts = rawProducts.map((product) => {
+    const measuredOnHand = product.batches.reduce((sum, batch) => sum + quantityNumber(batch.remainingQuantity), 0);
+    return { ...product, measuredOnHand, stockQuantity: stockUnitsFromMeasured(product, measuredOnHand) };
+  });
 
   const categories = [...new Set(allProducts.map((product) => product.category))].sort();
   const query = filters.query?.trim().toLocaleLowerCase();
@@ -111,7 +116,7 @@ export async function getStockData(filters: StockFilters = {}) {
     prisma.product.findMany({
       where: productWhere,
       orderBy: [{ register: { name: "asc" } }, { name: "asc" }],
-      include: { register: { select: { id: true, code: true, name: true } } },
+      include: { register: { select: { id: true, code: true, name: true, purpose: true } }, batches: { where: { remainingQuantity: { gt: 0 } }, orderBy: [{ expiryDate: "asc" }, { receivedAt: "asc" }] } },
     }),
     prisma.inventoryMovement.findMany({
       where: movementWhere,
@@ -155,7 +160,10 @@ export async function getStockData(filters: StockFilters = {}) {
     }))
     .filter((match) => match.score !== null)
     .sort((left, right) => (left.score ?? 0) - (right.score ?? 0));
-  const products = productMatches.map((match) => match.product);
+  const products = productMatches.map((match) => {
+    const measuredOnHand = match.product.batches.reduce((sum, batch) => sum + quantityNumber(batch.remainingQuantity), 0);
+    return { ...match.product, measuredOnHand, stockQuantity: stockUnitsFromMeasured(match.product, measuredOnHand) };
+  });
   const movementMatches = unfilteredMovements
     .map((movement) => ({
       movement,
@@ -177,12 +185,13 @@ export async function getStockData(filters: StockFilters = {}) {
     .filter((match) => match.score !== null)
     .sort((left, right) => (left.score ?? 0) - (right.score ?? 0));
   const movementCount = query ? movementMatches.length : unfilteredMovementCount;
-  const movements = movementMatches.slice(0, 100).map((match) => match.movement);
+  const movements = movementMatches.slice(0, 100).map((match) => ({ ...match.movement, quantityDelta: quantityNumber(match.movement.quantityDelta), balanceAfter: quantityNumber(match.movement.balanceAfter) }));
 
   return {
     registers,
     products,
     movements,
+    batches: products.flatMap((product) => product.batches.map((batch) => ({ ...batch, product: { id: product.id, name: product.name, sku: product.sku, kind: product.kind, quantityMetric: product.quantityMetric, quantityValue: product.quantityValue, servingSize: product.servingSize } }))),
     movementCount,
     metrics: {
       unitsOnHand: products.reduce((sum, product) => sum + product.stockQuantity, 0),
@@ -226,7 +235,7 @@ export async function getRegistersData(selectedRegisterId?: string) {
     null;
   const selectedShiftId = selected?.shifts[0]?.id;
 
-  const [recentSales, products] = await Promise.all([
+  const recentSales = await (
     selectedShiftId
       ? prisma.sale.findMany({
           where: { registerShiftId: selectedShiftId, status: "COMPLETED" },
@@ -234,17 +243,34 @@ export async function getRegistersData(selectedRegisterId?: string) {
           take: 10,
           include: { _count: { select: { items: true } } },
         })
-      : Promise.resolve([]),
-    prisma.product.findMany({
-      where: {
-        active: true,
-        stockQuantity: { gt: 0 },
-        ...(selected ? { registerId: selected.id } : {}),
-      },
-      orderBy: { name: "asc" },
-      select: { id: true, name: true, sku: true, stockQuantity: true, retailPriceLaari: true },
-    }),
-  ]);
+      : Promise.resolve([])
+  );
+  let products: Array<{ id: string; name: string; sku: string | null; stockQuantity: number; retailPriceLaari: number; soldOutReason: string | null }> = [];
+  if (selected?.purpose === "SHOP") {
+    const rows = await prisma.product.findMany({ where: { active: true, registerId: selected.id }, orderBy: { name: "asc" }, include: { batches: { where: { remainingQuantity: { gt: 0 } } } } });
+    const today = maldivesDate();
+    products = rows.map((product) => {
+      const usable = product.batches.filter((batch) => !batch.expiryDate || batch.expiryDate >= today).reduce((sum, batch) => sum + quantityNumber(batch.remainingQuantity), 0);
+      const available = Math.floor(stockUnitsFromMeasured(product, usable) + 0.000001);
+      return { id: product.id, name: product.name, sku: product.sku, stockQuantity: available, retailPriceLaari: product.retailPriceLaari, soldOutReason: available ? null : "Out of usable stock" };
+    }).filter((product) => product.stockQuantity > 0);
+  } else if (selected?.purpose === "RESTAURANT") {
+    const today = maldivesDate();
+    const rows = await prisma.menuItem.findMany({ where: { registerId: selected.id, active: true }, orderBy: { name: "asc" }, include: { ingredients: { include: { product: { include: { batches: { where: { remainingQuantity: { gt: 0 } } } } } } } } });
+    products = rows.map((item) => {
+      if (!item.ingredients.length) return { id: item.id, name: item.name, sku: null, stockQuantity: 0, retailPriceLaari: item.retailPriceLaari, soldOutReason: "Recipe is incomplete" };
+      let limiting: { count: number; reason: string | null } = { count: Number.MAX_SAFE_INTEGER, reason: null };
+      for (const ingredient of item.ingredients) {
+        const usable = ingredient.product.batches.filter((batch) => batch.expiryDate && batch.expiryDate >= today).reduce((sum, batch) => sum + quantityNumber(batch.remainingQuantity), 0);
+        const perItem = measuredPerServing(ingredient.product) * ingredient.servingMultiplier;
+        const count = perItem > 0 ? Math.floor(usable / perItem + 0.000001) : 0;
+        const hasUndated = ingredient.product.batches.some((batch) => !batch.expiryDate);
+        const hasExpired = ingredient.product.batches.some((batch) => batch.expiryDate && batch.expiryDate < today);
+        if (count < limiting.count) limiting = { count, reason: count > 0 ? null : `${ingredient.product.name}: ${hasUndated ? "expiry missing" : hasExpired ? "stock expired" : "insufficient stock"}` };
+      }
+      return { id: item.id, name: item.name, sku: null, stockQuantity: limiting.count, retailPriceLaari: item.retailPriceLaari, soldOutReason: limiting.count ? null : limiting.reason };
+    });
+  }
 
   const openShifts = registers.flatMap((register) => register.shifts);
   const activeShiftSalesLaari = openShifts.reduce(
@@ -309,10 +335,11 @@ export async function getOverviewData() {
         items: {
           select: {
             productId: true,
+            menuItemId: true,
             productName: true,
+            itemCategory: true,
             quantity: true,
             lineTotalLaari: true,
-            product: { select: { category: true } },
           },
         },
       },
@@ -343,13 +370,14 @@ export async function getOverviewData() {
 
   for (const sale of todaySales) {
     for (const item of sale.items) {
-      const product = productTotals.get(item.productId) ?? { name: item.productName, units: 0, salesLaari: 0 };
+      const itemId = item.productId ?? item.menuItemId ?? item.productName;
+      const product = productTotals.get(itemId) ?? { name: item.productName, units: 0, salesLaari: 0 };
       product.units += item.quantity;
       product.salesLaari += item.lineTotalLaari;
-      productTotals.set(item.productId, product);
+      productTotals.set(itemId, product);
       categoryTotals.set(
-        item.product.category,
-        (categoryTotals.get(item.product.category) ?? 0) + item.lineTotalLaari,
+        item.itemCategory,
+        (categoryTotals.get(item.itemCategory) ?? 0) + item.lineTotalLaari,
       );
     }
   }

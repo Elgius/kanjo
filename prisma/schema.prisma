@@ -8,25 +8,26 @@ datasource db {
 }
 
 model User {
-  id            String              @id
-  name          String
-  email         String
-  username      String?             @unique
+  id              String              @id
+  name            String
+  email           String
+  username        String?             @unique
   displayUsername String?
-  emailVerified Boolean             @default(false)
-  image         String?
-  roleId        String              @db.Uuid
-  isSiteAdmin   Boolean             @default(false)
-  createdAt     DateTime            @default(now())
-  updatedAt     DateTime            @updatedAt
-  role          Role                @relation(fields: [roleId], references: [id], onDelete: Restrict)
-  sessions      Session[]
-  accounts      Account[]
-  openedShifts  RegisterShift[]     @relation("ShiftOpenedBy")
-  closedShifts  RegisterShift[]     @relation("ShiftClosedBy")
-  sales         Sale[]              @relation("SaleCreatedBy")
-  stockChanges  InventoryMovement[]
-  auditLogs     AuditLog[]          @relation("AuditActor")
+  emailVerified   Boolean             @default(false)
+  image           String?
+  roleId          String              @db.Uuid
+  isSiteAdmin     Boolean             @default(false)
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+  role            Role                @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  sessions        Session[]
+  accounts        Account[]
+  openedShifts    RegisterShift[]     @relation("ShiftOpenedBy")
+  closedShifts    RegisterShift[]     @relation("ShiftClosedBy")
+  sales           Sale[]              @relation("SaleCreatedBy")
+  stockChanges    InventoryMovement[]
+  receivedBatches InventoryBatch[]    @relation("BatchReceivedBy")
+  auditLogs       AuditLog[]          @relation("AuditActor")
 
   @@unique([email])
   @@index([roleId])
@@ -82,21 +83,21 @@ model RolePermission {
 }
 
 model AuditLog {
-  id            String       @id @default(uuid()) @db.Uuid
-  occurredAt    DateTime     @default(now())
-  outcome       AuditOutcome
-  event         String
-  page          PageKey?
-  actorId       String?
-  actorLabel    String?
-  targetType    String?
-  targetId      String?
-  summary       String
-  metadata      Json?
-  ipAddress     String?
-  userAgent     String?
-  searchText    String       @db.Text
-  actor         User?        @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+  id         String       @id @default(uuid()) @db.Uuid
+  occurredAt DateTime     @default(now())
+  outcome    AuditOutcome
+  event      String
+  page       PageKey?
+  actorId    String?
+  actorLabel String?
+  targetType String?
+  targetId   String?
+  summary    String
+  metadata   Json?
+  ipAddress  String?
+  userAgent  String?
+  searchText String       @db.Text
+  actor      User?        @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
 
   @@index([occurredAt(sort: Desc), id(sort: Desc)])
   @@index([actorId, occurredAt(sort: Desc)])
@@ -137,28 +138,34 @@ enum ProductKind {
   CONSUMABLE
 }
 
+enum RegisterPurpose {
+  SHOP
+  RESTAURANT
+}
+
 model Product {
-  id                String              @id @default(uuid()) @db.Uuid
-  registerId        String              @db.Uuid
-  sku               String              @unique
-  barcode           String?             @unique
+  id                String               @id @default(uuid()) @db.Uuid
+  registerId        String               @db.Uuid
+  sku               String               @unique
+  barcode           String?              @unique
   name              String
   category          String
   description       String?
   retailPriceLaari  Int
-  costPriceLaari    Int                 @default(0)
-  stockQuantity     Int                 @default(0)
-  lowStockThreshold Int                 @default(10)
-  kind              ProductKind         @default(GOODS)
+  costPriceLaari    Int                  @default(0)
+  lowStockThreshold Int                  @default(10)
+  kind              ProductKind          @default(GOODS)
   quantityMetric    String?
-  quantityValue     Decimal?            @db.Decimal(12, 3)
-  servingSize       Decimal?            @db.Decimal(12, 3)
-  active            Boolean             @default(true)
-  createdAt         DateTime            @default(now())
-  updatedAt         DateTime            @updatedAt
-  register          CashRegister        @relation(fields: [registerId], references: [id], onDelete: Restrict)
+  quantityValue     Decimal?             @db.Decimal(12, 3)
+  servingSize       Decimal?             @db.Decimal(12, 3)
+  active            Boolean              @default(true)
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+  register          CashRegister         @relation(fields: [registerId], references: [id], onDelete: Restrict)
   saleItems         SaleItem[]
   stockMovements    InventoryMovement[]
+  batches           InventoryBatch[]
+  menuIngredients   MenuItemIngredient[]
 
   @@index([active, updatedAt(sort: Desc)])
   @@index([registerId, active, name])
@@ -170,15 +177,66 @@ model CashRegister {
   id             String              @id @default(uuid()) @db.Uuid
   code           String              @unique
   name           String              @unique
+  purpose        RegisterPurpose     @default(SHOP)
   active         Boolean             @default(true)
   createdAt      DateTime            @default(now())
   updatedAt      DateTime            @updatedAt
   shifts         RegisterShift[]
   products       Product[]
   stockMovements InventoryMovement[]
+  menuItems      MenuItem[]
+  batches        InventoryBatch[]
 
   @@index([active, name])
   @@map("cash_registers")
+}
+
+model MenuItem {
+  id               String               @id @default(uuid()) @db.Uuid
+  registerId       String               @db.Uuid
+  name             String
+  category         String
+  retailPriceLaari Int
+  active           Boolean              @default(true)
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+  register         CashRegister         @relation(fields: [registerId], references: [id], onDelete: Restrict)
+  ingredients      MenuItemIngredient[]
+  saleItems        SaleItem[]
+
+  @@unique([registerId, name])
+  @@index([registerId, active, name])
+  @@map("menu_items")
+}
+
+model MenuItemIngredient {
+  menuItemId        String   @db.Uuid
+  productId         String   @db.Uuid
+  servingMultiplier Int
+  menuItem          MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+  product           Product  @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@id([menuItemId, productId])
+  @@index([productId])
+  @@map("menu_item_ingredients")
+}
+
+model InventoryBatch {
+  id                String       @id @default(uuid()) @db.Uuid
+  productId         String       @db.Uuid
+  registerId        String       @db.Uuid
+  receivedById      String
+  receivedQuantity  Decimal      @db.Decimal(14, 3)
+  remainingQuantity Decimal      @db.Decimal(14, 3)
+  expiryDate        DateTime?    @db.Date
+  receivedAt        DateTime     @default(now())
+  product           Product      @relation(fields: [productId], references: [id], onDelete: Restrict)
+  register          CashRegister @relation(fields: [registerId], references: [id], onDelete: Restrict)
+  receivedBy        User         @relation("BatchReceivedBy", fields: [receivedById], references: [id], onDelete: Restrict)
+
+  @@index([productId, expiryDate, receivedAt])
+  @@index([registerId, expiryDate])
+  @@map("inventory_batches")
 }
 
 model RegisterShift {
@@ -225,19 +283,23 @@ model Sale {
 }
 
 model SaleItem {
-  id             String  @id @default(uuid()) @db.Uuid
-  saleId         String  @db.Uuid
-  productId      String  @db.Uuid
+  id             String    @id @default(uuid()) @db.Uuid
+  saleId         String    @db.Uuid
+  productId      String?   @db.Uuid
+  menuItemId     String?   @db.Uuid
   productName    String
-  productSku     String
+  productSku     String?
+  itemCategory   String
   quantity       Int
   unitPriceLaari Int
   lineTotalLaari Int
-  sale           Sale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
-  product        Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+  sale           Sale      @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  product        Product?  @relation(fields: [productId], references: [id], onDelete: Restrict)
+  menuItem       MenuItem? @relation(fields: [menuItemId], references: [id], onDelete: Restrict)
 
   @@index([saleId])
   @@index([productId])
+  @@index([menuItemId])
   @@map("sale_items")
 }
 
@@ -248,8 +310,8 @@ model InventoryMovement {
   saleId        String?               @db.Uuid
   createdById   String
   type          InventoryMovementType
-  quantityDelta Int
-  balanceAfter  Int
+  quantityDelta Decimal               @db.Decimal(14, 3)
+  balanceAfter  Decimal               @db.Decimal(14, 3)
   reason        String?
   createdAt     DateTime              @default(now())
   product       Product               @relation(fields: [productId], references: [id], onDelete: Restrict)

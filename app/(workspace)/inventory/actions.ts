@@ -7,8 +7,9 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { getAuditRequestContext, safeWriteAudit, writeAudit } from "@/lib/audit";
 import { requireActionAccess, type AuthorizationContext } from "@/lib/authorization";
-import { adjustInventory, PosError } from "@/lib/pos/sales";
-import { parseProductForm, parseStockAdjustment } from "@/lib/pos/validation";
+import { maldivesDate, measured, measuredPerStockUnit } from "@/lib/pos/inventory";
+import { assignBatchExpiry, PosError, receiveInventory, writeOffBatch } from "@/lib/pos/sales";
+import { parseBatchExpiry, parseBatchWriteOff, parseProductForm, parseReceiveStock } from "@/lib/pos/validation";
 
 function inventoryRedirect(kind: "success" | "error", message: string): never {
   redirect(`/inventory?${kind}=${encodeURIComponent(message)}`);
@@ -46,27 +47,41 @@ export async function createProductAction(formData: FormData) {
 
   const register = await prisma.cashRegister.findFirst({
     where: { id: parsed.data.registerId, active: true },
-    select: { id: true },
+    select: { id: true, purpose: true },
   });
   if (!register) {
     await auditFailure(authorization, "PRODUCT_CREATE", "Select an active register.");
     inventoryRedirect("error", "Select an active register.");
+  }
+  if (register.purpose === "RESTAURANT" && parsed.data.openingStock > 0 && !parsed.data.expiryDate) {
+    await auditFailure(authorization, "PRODUCT_CREATE", "Restaurant opening stock requires an expiry date.");
+    inventoryRedirect("error", "Restaurant opening stock requires an expiry date.");
+  }
+  if (parsed.data.expiryDate && parsed.data.expiryDate < maldivesDate()) {
+    await auditFailure(authorization, "PRODUCT_CREATE", "Opening stock cannot already be expired.");
+    inventoryRedirect("error", "Opening stock cannot already be expired.");
   }
 
   const request = await getAuditRequestContext();
 
   try {
     await prisma.$transaction(async (tx) => {
-      const product = await tx.product.create({ data: parsed.data });
-      if (parsed.data.stockQuantity > 0) {
+      const { openingStock, expiryDate, ...productData } = parsed.data;
+      const product = await tx.product.create({ data: productData });
+      if (openingStock > 0) {
+        const quantity = measured(measuredPerStockUnit(product) * openingStock);
+        await tx.inventoryBatch.create({ data: {
+          productId: product.id, registerId: product.registerId, receivedById: authorization.user.id,
+          receivedQuantity: quantity, remainingQuantity: quantity, expiryDate,
+        } });
         await tx.inventoryMovement.create({
           data: {
             productId: product.id,
             registerId: product.registerId,
             createdById: authorization.user.id,
             type: "INITIAL",
-            quantityDelta: parsed.data.stockQuantity,
-            balanceAfter: parsed.data.stockQuantity,
+            quantityDelta: quantity,
+            balanceAfter: quantity,
             reason: "Opening stock",
           },
         });
@@ -83,7 +98,8 @@ export async function createProductAction(formData: FormData) {
         metadata: {
           sku: product.sku,
           registerId: product.registerId,
-          openingStock: parsed.data.stockQuantity,
+          openingStock,
+          expiryDate,
         },
         request,
       });
@@ -102,16 +118,16 @@ export async function createProductAction(formData: FormData) {
   inventoryRedirect("success", "Product added.");
 }
 
-export async function adjustStockAction(productId: string, formData: FormData) {
+export async function receiveStockAction(productId: string, formData: FormData) {
   const authorization = await requireActionAccess("INVENTORY", "STOCK_ADJUST");
-  const parsed = parseStockAdjustment(formData);
+  const parsed = parseReceiveStock(formData);
   if (!parsed.ok) {
     await auditFailure(authorization, "STOCK_ADJUST", parsed.error, { productId });
     inventoryRedirect("error", parsed.error);
   }
 
   try {
-    await adjustInventory(prisma, {
+    await receiveInventory(prisma, {
       productId,
       createdById: authorization.user.id,
       ...parsed.data,
@@ -121,7 +137,7 @@ export async function adjustStockAction(productId: string, formData: FormData) {
       },
     });
   } catch (error) {
-    const message = error instanceof PosError ? error.message : "Stock could not be adjusted.";
+    const message = error instanceof PosError ? error.message : "Stock could not be received.";
     await auditFailure(authorization, "STOCK_ADJUST", message, { productId });
     inventoryRedirect("error", message);
   }
@@ -129,5 +145,31 @@ export async function adjustStockAction(productId: string, formData: FormData) {
   revalidatePath("/inventory");
   revalidatePath("/stock");
   revalidatePath("/");
-  inventoryRedirect("success", "Stock updated.");
+  inventoryRedirect("success", "Stock batch received.");
+}
+
+export async function assignBatchExpiryAction(batchId: string, formData: FormData) {
+  const authorization = await requireActionAccess("INVENTORY", "STOCK_ADJUST");
+  const parsed = parseBatchExpiry(formData);
+  if (!parsed.ok) inventoryRedirect("error", parsed.error);
+  try {
+    await assignBatchExpiry(prisma, { batchId, createdById: authorization.user.id, ...parsed.data, audit: { actorLabel: actorLabel(authorization), request: await getAuditRequestContext() } });
+  } catch (error) {
+    inventoryRedirect("error", error instanceof PosError ? error.message : "Expiry could not be updated.");
+  }
+  revalidatePath("/inventory"); revalidatePath("/stock"); revalidatePath("/registers");
+  inventoryRedirect("success", "Batch expiry updated.");
+}
+
+export async function writeOffBatchAction(batchId: string, formData: FormData) {
+  const authorization = await requireActionAccess("INVENTORY", "STOCK_ADJUST");
+  const parsed = parseBatchWriteOff(formData);
+  if (!parsed.ok) inventoryRedirect("error", parsed.error);
+  try {
+    await writeOffBatch(prisma, { batchId, createdById: authorization.user.id, ...parsed.data, audit: { actorLabel: actorLabel(authorization), request: await getAuditRequestContext() } });
+  } catch (error) {
+    inventoryRedirect("error", error instanceof PosError ? error.message : "Stock could not be written off.");
+  }
+  revalidatePath("/inventory"); revalidatePath("/stock"); revalidatePath("/registers"); revalidatePath("/");
+  inventoryRedirect("success", "Batch stock written off.");
 }

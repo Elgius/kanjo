@@ -11,6 +11,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatMvr } from "@/lib/pos/money";
+import { dateOnly, formatQuantity, maldivesDate, quantityNumber } from "@/lib/pos/inventory";
 import { getStockData, type StockFilters } from "@/lib/pos/queries";
 import { cn } from "@/lib/utils";
 import { requirePageAccess } from "@/lib/authorization";
@@ -63,7 +64,7 @@ export default async function StockPage({ searchParams }: PageProps<"/stock">) {
       />
 
       <section className="grid gap-3.5 sm:grid-cols-2 xl:grid-cols-4">
-        <MetricCard label="UNITS ON HAND" value={data.metrics.unitsOnHand.toLocaleString()} dark />
+        <MetricCard label="STOCK ITEMS ON HAND" value={Number(data.metrics.unitsOnHand.toFixed(3)).toLocaleString()} dark />
         <MetricCard label="STOCK VALUE" value={formatMvr(data.metrics.stockValueLaari)} />
         <MetricCard label="LOW STOCK ITEMS" value={String(data.metrics.lowStock)} accent />
         <MetricCard label="OUT OF STOCK" value={String(data.metrics.outOfStock)} />
@@ -142,7 +143,7 @@ export default async function StockPage({ searchParams }: PageProps<"/stock">) {
                   <TableCell className="p-0">{product.kind === "CONSUMABLE" ? "Consumable" : "Goods"}</TableCell>
                   <TableCell className="p-0 text-[11px] text-muted-foreground">{contents}</TableCell>
                   <TableCell className={cn("p-0 font-semibold", low && "text-chart-1", product.stockQuantity === 0 && "text-destructive")}>
-                    {product.stockQuantity}{product.stockQuantity === 0 ? " · OUT" : low ? " · LOW" : ""}
+                    {Number(product.stockQuantity.toFixed(3)).toLocaleString()}{product.kind === "CONSUMABLE" ? ` · ${formatQuantity(product, product.measuredOnHand)}` : ""}{product.stockQuantity === 0 ? " · OUT" : low ? " · LOW" : ""}
                   </TableCell>
                   <TableCell className="p-0 text-right font-mono">{formatMvr(product.stockQuantity * product.costPriceLaari)}</TableCell>
                 </TableRow>
@@ -152,6 +153,15 @@ export default async function StockPage({ searchParams }: PageProps<"/stock">) {
         ) : (
           <div className="flex min-h-40 items-center justify-center text-center text-xs text-muted-foreground">No stock items match these filters.</div>
         )}
+      </Surface>
+
+      <Surface className="overflow-hidden px-5">
+        <header className="border-b border-border py-5"><h2 className="text-sm font-semibold">Expiry batches</h2><p className="mt-1 text-[11px] text-muted-foreground">Physical stock grouped by delivery and expiry date.</p></header>
+        <div className="divide-y divide-border">{data.batches.length ? data.batches.map((batch) => {
+          const today = maldivesDate();
+          const status = !batch.expiryDate ? "Expiry missing" : batch.expiryDate < today ? "Expired" : "Usable";
+          return <div key={batch.id} className="grid gap-2 py-4 text-xs sm:grid-cols-[1fr_180px_160px] sm:items-center"><span><strong>{batch.product.name}</strong><small className="ml-2 font-mono text-muted-foreground">{batch.product.sku}</small></span><span>{formatQuantity(batch.product, quantityNumber(batch.remainingQuantity))}</span><span className={cn(status === "Expired" && "text-destructive", status === "Usable" && "text-emerald-700")}>{status}{batch.expiryDate ? ` · ${dateOnly(batch.expiryDate)}` : ""}</span></div>;
+        }) : <p className="py-8 text-center text-xs text-muted-foreground">No remaining stock batches.</p>}</div>
       </Surface>
 
       <Surface className="overflow-hidden px-5">
@@ -187,9 +197,9 @@ export default async function StockPage({ searchParams }: PageProps<"/stock">) {
                   <TableCell className="p-0"><span className="grid gap-0.5"><span className="font-semibold">{movement.product.name}</span><span className="font-mono text-[10px] text-muted-foreground">{movement.product.sku}</span></span></TableCell>
                   <TableCell className="p-0"><span className="inline-flex rounded-full bg-accent px-2.5 py-1 text-[10px] font-semibold">{movementLabels[movement.type]}</span></TableCell>
                   <TableCell className={cn("p-0 text-right font-mono font-semibold", positive ? "text-emerald-700" : "text-destructive")}>
-                    <span className="inline-flex items-center gap-1">{positive ? <ArrowUp className="size-3" aria-hidden="true" /> : <ArrowDown className="size-3" aria-hidden="true" />}{positive ? "+" : ""}{movement.quantityDelta}</span>
+                    <span className="inline-flex items-center gap-1">{positive ? <ArrowUp className="size-3" aria-hidden="true" /> : <ArrowDown className="size-3" aria-hidden="true" />}{positive ? "+" : ""}{formatQuantity(movement.product, movement.quantityDelta)}</span>
                   </TableCell>
-                  <TableCell className="p-0 text-right font-mono font-semibold">{movement.balanceAfter}</TableCell>
+                  <TableCell className="p-0 text-right font-mono font-semibold">{formatQuantity(movement.product, movement.balanceAfter)}</TableCell>
                   <TableCell className="p-0 pl-8"><span className="grid gap-0.5"><span>{reference}</span><span className="text-[10px] text-muted-foreground">By {movement.createdBy.name}</span></span></TableCell>
                 </TableRow>
               );

@@ -73,7 +73,7 @@ export async function createRegisterAction(formData: FormData) {
         targetType: "register",
         targetId: created.id,
         summary: `Register ${created.name} created.`,
-        metadata: { code: created.code },
+        metadata: { code: created.code, purpose: created.purpose },
         request,
       });
       return created;

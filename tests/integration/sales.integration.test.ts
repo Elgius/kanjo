@@ -44,11 +44,14 @@ databaseDescribe("Neon sale transaction", () => {
         category: "Test",
         retailPriceLaari: 2_500,
         costPriceLaari: 1_000,
-        stockQuantity: 5,
         lowStockThreshold: 1,
       },
     });
     productId = product.id;
+    await db.inventoryBatch.create({ data: {
+      productId, registerId, receivedById: userId,
+      receivedQuantity: 5, remainingQuantity: 5,
+    } });
   });
 
   afterAll(async () => {
@@ -56,6 +59,7 @@ databaseDescribe("Neon sale transaction", () => {
     await db.auditLog.deleteMany({ where: { actorId: userId } });
     await db.inventoryMovement.deleteMany({ where: { createdById: userId } });
     await db.sale.deleteMany({ where: { createdById: userId } });
+    await db.inventoryBatch.deleteMany({ where: { productId } });
     await db.product.deleteMany({ where: { id: productId } });
     await db.registerShift.deleteMany({ where: { registerId } });
     await db.cashRegister.deleteMany({ where: { id: registerId } });
@@ -69,24 +73,23 @@ databaseDescribe("Neon sale transaction", () => {
       shiftId,
       createdById: userId,
       paymentMethod: "CASH",
-      items: [{ productId, quantity: 2 }],
+      items: [{ itemId: productId, quantity: 2 }],
       audit: { actorLabel: marker },
     });
 
     expect(sale.totalLaari).toBe(5_000);
     const [product, storedSale, movement, audit] = await Promise.all([
-      db.product.findUniqueOrThrow({ where: { id: productId } }),
+      db.inventoryBatch.aggregate({ where: { productId }, _sum: { remainingQuantity: true } }),
       db.sale.findUniqueOrThrow({ where: { id: sale.id }, include: { items: true } }),
       db.inventoryMovement.findFirstOrThrow({ where: { saleId: sale.id } }),
       db.auditLog.findFirstOrThrow({ where: { event: "SALE_RECORD", targetId: sale.id } }),
     ]);
-    expect(product.stockQuantity).toBe(3);
-    expect(product.registerId).toBe(registerId);
+    expect(Number(product._sum.remainingQuantity)).toBe(3);
     expect(storedSale.items).toHaveLength(1);
     expect(storedSale.items[0].lineTotalLaari).toBe(5_000);
-    expect(movement.quantityDelta).toBe(-2);
+    expect(Number(movement.quantityDelta)).toBe(-2);
     expect(movement.registerId).toBe(registerId);
-    expect(movement.balanceAfter).toBe(3);
+    expect(Number(movement.balanceAfter)).toBe(3);
     expect(audit.outcome).toBe("SUCCESS");
     expect(audit.actorId).toBe(userId);
   });
@@ -101,12 +104,12 @@ databaseDescribe("Neon sale transaction", () => {
         shiftId,
         createdById: userId,
         paymentMethod: "CARD",
-        items: [{ productId, quantity: 99 }],
+        items: [{ itemId: productId, quantity: 99 }],
         audit: { actorLabel: marker },
       }),
-    ).rejects.toThrow("only has 3 in stock");
+    ).rejects.toThrow("does not have enough usable stock");
     expect(await db.sale.count({ where: { createdById: userId } })).toBe(before);
     expect(await db.auditLog.count({ where: { actorId: userId } })).toBe(auditBefore);
-    expect((await db.product.findUniqueOrThrow({ where: { id: productId } })).stockQuantity).toBe(3);
+    expect(Number((await db.inventoryBatch.aggregate({ where: { productId }, _sum: { remainingQuantity: true } }))._sum.remainingQuantity)).toBe(3);
   });
 });

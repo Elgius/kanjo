@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { parseProductForm, parseSaleForm, parseStockAdjustment } from "@/lib/pos/validation";
+import { parseMenuItemForm, parseProductForm, parseRegisterForm, parseSaleForm, parseStockAdjustment } from "@/lib/pos/validation";
 
 describe("POS form validation", () => {
   test("normalizes a valid product", () => {
@@ -20,7 +20,7 @@ describe("POS form validation", () => {
     if (result.ok) {
       expect(result.data.sku).toBe("BEV-001");
       expect(result.data.retailPriceLaari).toBe(2550);
-      expect(result.data.stockQuantity).toBe(8);
+      expect(result.data.openingStock).toBe(8);
     }
   });
 
@@ -68,12 +68,30 @@ describe("POS form validation", () => {
 
   test("accepts supported sale payment methods only", () => {
     const sale = new FormData();
-    sale.set("productId", "product-id");
+    sale.set("itemId", "product-id");
     sale.set("quantity", "2");
     sale.set("paymentMethod", "CARD");
     expect(parseSaleForm(sale).ok).toBe(true);
 
     sale.set("paymentMethod", "CRYPTO");
     expect(parseSaleForm(sale).ok).toBe(false);
+  });
+
+  test("requires a supported register purpose", () => {
+    const form = new FormData();
+    form.set("code", "REST-01");
+    form.set("name", "Restaurant");
+    expect(parseRegisterForm(form).ok).toBe(false);
+    form.set("purpose", "RESTAURANT");
+    expect(JSON.stringify(parseRegisterForm(form))).toBe(JSON.stringify({ ok: true, data: { code: "REST-01", name: "Restaurant", purpose: "RESTAURANT" } }));
+  });
+
+  test("validates menu recipes and whole serving multiples", () => {
+    const form = new FormData();
+    form.set("name", "Espresso"); form.set("category", "Coffee"); form.set("retailPrice", "45");
+    form.append("ingredientProductId", "beans"); form.append("servingMultiplier", "1");
+    expect(parseMenuItemForm(form).ok).toBe(true);
+    form.set("servingMultiplier", "0.5");
+    expect(parseMenuItemForm(form).ok).toBe(false);
   });
 });

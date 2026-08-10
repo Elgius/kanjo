@@ -49,7 +49,7 @@ async function main() {
 
   let createdProducts = 0;
   for (const fixture of seedProducts) {
-    const { movements, registerCode, ...productData } = fixture;
+    const { movements, registerCode, stockQuantity, ...productData } = fixture;
     const existing = await prisma.product.findUnique({
       where: { sku: fixture.sku },
       select: { id: true },
@@ -62,9 +62,20 @@ async function main() {
       const product = await tx.product.create({
         data: { ...productData, registerId },
       });
+      const measuredPerUnit = product.kind === "CONSUMABLE" ? Number(product.quantityValue) : 1;
+      if (stockQuantity > 0) {
+        await tx.inventoryBatch.create({ data: {
+          productId: product.id, registerId, receivedById: actor.id,
+          receivedQuantity: stockQuantity * measuredPerUnit,
+          remainingQuantity: stockQuantity * measuredPerUnit,
+          expiryDate: null,
+        } });
+      }
       await tx.inventoryMovement.createMany({
         data: movements.map((movement, index) => ({
           ...movement,
+          quantityDelta: movement.quantityDelta * measuredPerUnit,
+          balanceAfter: movement.balanceAfter * measuredPerUnit,
           productId: product.id,
           registerId,
           createdById: actor.id,

@@ -11,10 +11,14 @@ type RegisterOption = {
   id: string;
   code: string;
   name: string;
+  purpose: "SHOP" | "RESTAURANT";
 };
 
 export function NewProductMenu({ registers }: { registers: RegisterOption[] }) {
   const [kind, setKind] = useState<"GOODS" | "CONSUMABLE">("GOODS");
+  const [registerId, setRegisterId] = useState("");
+  const [openingStock, setOpeningStock] = useState(0);
+  const restaurant = registers.find((register) => register.id === registerId)?.purpose === "RESTAURANT";
 
   return (
     <details className="group relative">
@@ -34,7 +38,7 @@ export function NewProductMenu({ registers }: { registers: RegisterOption[] }) {
 
         <label className="grid gap-1.5 text-xs sm:col-span-2">
           Register
-          <select className={fieldClass} name="registerId" defaultValue="" required>
+          <select className={fieldClass} name="registerId" value={registerId} onChange={(event) => setRegisterId(event.target.value)} required>
             <option value="" disabled>Select a register</option>
             {registers.map((register) => (
               <option key={register.id} value={register.id}>
@@ -107,7 +111,8 @@ export function NewProductMenu({ registers }: { registers: RegisterOption[] }) {
         <label className="grid gap-1.5 text-xs">Category<input className={fieldClass} name="category" required /></label>
         <label className="grid gap-1.5 text-xs">Retail price (MVR)<input className={fieldClass} name="retailPrice" inputMode="decimal" defaultValue="0.00" required /></label>
         <label className="grid gap-1.5 text-xs">Cost price (MVR)<input className={fieldClass} name="costPrice" inputMode="decimal" defaultValue="0.00" required /></label>
-        <label className="grid gap-1.5 text-xs">Opening stock<input className={fieldClass} name="stockQuantity" type="number" min="0" defaultValue="0" required /></label>
+        <label className="grid gap-1.5 text-xs">Opening stock<input className={fieldClass} name="stockQuantity" type="number" min="0" value={openingStock} onChange={(event) => setOpeningStock(Number(event.target.value))} required /></label>
+        {restaurant ? <label className="grid gap-1.5 text-xs">Opening batch expiry<input className={fieldClass} name="expiryDate" type="date" required={openingStock > 0} /><span className="text-[10px] text-muted-foreground">Required when restaurant opening stock is above zero.</span></label> : null}
         <label className="grid gap-1.5 text-xs">Low-stock threshold<input className={fieldClass} name="lowStockThreshold" type="number" min="0" defaultValue="10" required /></label>
         <label className="grid gap-1.5 text-xs sm:col-span-2">Description<textarea className="min-h-20 rounded-lg border border-border bg-card p-3 text-xs outline-none focus:border-ring focus:ring-2 focus:ring-ring/15" name="description" /></label>
 

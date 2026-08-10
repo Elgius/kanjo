@@ -11,10 +11,11 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatMvr } from "@/lib/pos/money";
+import { dateOnly, formatQuantity, maldivesDate, quantityNumber } from "@/lib/pos/inventory";
 import { getInventoryData, type InventoryFilters } from "@/lib/pos/queries";
 import { cn } from "@/lib/utils";
 import { canAccess, requirePageAccess } from "@/lib/authorization";
-import { adjustStockAction } from "./actions";
+import { assignBatchExpiryAction, receiveStockAction, writeOffBatchAction } from "./actions";
 import { NewProductMenu } from "./product-form";
 
 const fieldClass =
@@ -126,15 +127,11 @@ export default async function InventoryPage({ searchParams }: PageProps<"/invent
                     <TableCell className="p-0">{product.register.name}</TableCell>
                     <TableCell className="p-0">{product.kind === "CONSUMABLE" ? "Consumable" : "Goods"}</TableCell>
                     <TableCell className={cn("p-0 font-semibold", low && "text-chart-1", product.stockQuantity === 0 && "text-destructive")}>
-                      {product.stockQuantity}{product.stockQuantity === 0 ? " · OUT" : low ? " · LOW" : ""}
+                      {Number(product.stockQuantity.toFixed(3)).toLocaleString()}{product.kind === "CONSUMABLE" ? ` units · ${formatQuantity(product, product.measuredOnHand)}` : ""}{product.stockQuantity === 0 ? " · OUT" : low ? " · LOW" : ""}
                     </TableCell>
                     <TableCell className="p-0 font-mono">{formatMvr(product.retailPriceLaari)}</TableCell>
                     <TableCell className="p-0 text-right">
-                      {canEdit ? <form action={adjustStockAction.bind(null, product.id)} className="inline-flex items-center justify-end gap-2">
-                        <input aria-label={`Stock adjustment for ${product.name}`} name="quantityDelta" type="number" placeholder="+ / −" required className="h-8 w-20 rounded-md border border-border bg-card px-2 text-xs" />
-                        <input type="hidden" name="reason" value="Manual inventory adjustment" />
-                        <button type="submit" className="h-8 rounded-md border border-border px-3 text-[11px] hover:bg-accent">Update</button>
-                      </form> : <span className="text-[10px] text-muted-foreground">View only</span>}
+                      {canEdit ? <details className="relative inline-block text-left"><summary className="cursor-pointer list-none rounded-md border border-border px-3 py-2 text-[11px] hover:bg-accent">Receive stock</summary><form action={receiveStockAction.bind(null, product.id)} className="absolute right-0 z-20 mt-2 grid w-64 gap-2 rounded-xl border border-border bg-card p-4 text-left shadow-xl"><strong className="text-xs">Receive {product.name}</strong><label className="grid gap-1 text-[10px]">STOCK ITEMS<input name="stockUnits" type="number" min="1" step="1" required className={fieldClass} /></label><label className="grid gap-1 text-[10px]">EXPIRY {product.register.purpose === "RESTAURANT" ? "(REQUIRED)" : "(OPTIONAL)"}<input name="expiryDate" type="date" required={product.register.purpose === "RESTAURANT"} className={fieldClass} /></label><input type="hidden" name="reason" value="Stock received" /><button className="h-9 rounded-lg bg-primary text-xs font-semibold text-primary-foreground">Add batch</button></form></details> : <span className="text-[10px] text-muted-foreground">View only</span>}
                     </TableCell>
                   </TableRow>
                 );
@@ -155,6 +152,16 @@ export default async function InventoryPage({ searchParams }: PageProps<"/invent
             {data.page < data.pageCount ? <Link href={inventoryHref(params, data.page + 1)} aria-label="Next page" className="flex size-[30px] items-center justify-center rounded-[7px] border border-border"><ChevronRight className="size-3" /></Link> : null}
           </nav>
         </footer>
+      </Surface>
+
+      <Surface className="overflow-hidden p-5">
+        <header className="mb-4"><h2 className="text-sm font-semibold">Stock batches and expiry</h2><p className="mt-1 text-[11px] text-muted-foreground">Expired stock remains visible and is never used for restaurant sales.</p></header>
+        <div className="grid gap-3">{data.products.flatMap((product) => product.batches.map((batch) => {
+          const today = maldivesDate();
+          const status = !batch.expiryDate ? "Expiry missing" : batch.expiryDate < today ? "Expired" : "Usable";
+          const remaining = quantityNumber(batch.remainingQuantity);
+          return <div key={batch.id} className="grid gap-3 rounded-lg border border-border p-3 text-xs lg:grid-cols-[1fr_150px_160px_minmax(260px,auto)] lg:items-center"><div><strong>{product.name}</strong><p className="mt-1 font-mono text-[10px] text-muted-foreground">{batch.id}</p></div><span>{formatQuantity(product, remaining)}</span><span className={cn(status === "Expired" && "text-destructive", status === "Usable" && "text-emerald-700")}>{status}{batch.expiryDate ? ` · ${dateOnly(batch.expiryDate)}` : ""}</span>{canEdit ? <div className="flex flex-wrap justify-end gap-2">{!batch.expiryDate ? <form action={assignBatchExpiryAction.bind(null, batch.id)} className="flex gap-2"><input aria-label={`Expiry for ${product.name}`} name="expiryDate" type="date" className="h-8 rounded-md border border-border bg-card px-2 text-[11px]" required /><button className="h-8 rounded-md border border-border px-2 text-[11px]">Set expiry</button></form> : null}<form action={writeOffBatchAction.bind(null, batch.id)} className="flex gap-2"><input aria-label={`Write off ${product.name}`} name="measuredQuantity" type="number" min="0.001" max={remaining} step="0.001" placeholder="Amount" className="h-8 w-24 rounded-md border border-border bg-card px-2 text-[11px]" required /><input type="hidden" name="reason" value="Batch write-off" /><button className="h-8 rounded-md border border-border px-2 text-[11px]">Write off</button></form></div> : null}</div>;
+        }))}</div>
       </Surface>
     </PageContainer>
   );
