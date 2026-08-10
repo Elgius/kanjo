@@ -1,31 +1,43 @@
 import "server-only";
 
+import type { InventoryMovementType, Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/db";
 import { formatHour, getBusinessDayRange, getMaldivesHour, shiftRange } from "@/lib/pos/dates";
+import { fuzzySearchMatches, fuzzySearchScore } from "@/lib/pos/search";
 
 export type InventoryFilters = {
   query?: string;
   category?: string;
+  register?: string;
   status?: "all" | "low" | "out" | "in";
   sort?: "recent" | "name" | "stock";
   page?: number;
 };
 
 export async function getInventoryData(filters: InventoryFilters = {}) {
-  const allProducts = await prisma.product.findMany({
-    where: { active: true },
-    orderBy: { updatedAt: "desc" },
-  });
+  const [allProducts, registers] = await Promise.all([
+    prisma.product.findMany({
+      where: { active: true },
+      orderBy: { updatedAt: "desc" },
+      include: { register: { select: { id: true, code: true, name: true } } },
+    }),
+    prisma.cashRegister.findMany({
+      where: { active: true },
+      orderBy: { name: "asc" },
+      select: { id: true, code: true, name: true },
+    }),
+  ]);
 
   const categories = [...new Set(allProducts.map((product) => product.category))].sort();
   const query = filters.query?.trim().toLocaleLowerCase();
   const category = filters.category && filters.category !== "all" ? filters.category : null;
   const status = filters.status ?? "all";
+  const registerId = filters.register && filters.register !== "all" ? filters.register : null;
 
   const matching = allProducts.filter((product) => {
-    const searchable = `${product.name} ${product.sku} ${product.barcode ?? ""}`.toLocaleLowerCase();
-    if (query && !searchable.includes(query)) return false;
+    if (query && !fuzzySearchMatches(query, [product.name, product.sku, product.barcode])) return false;
     if (category && product.category !== category) return false;
+    if (registerId && product.registerId !== registerId) return false;
     if (status === "out" && product.stockQuantity !== 0) return false;
     if (status === "low" && !(product.stockQuantity > 0 && product.stockQuantity <= product.lowStockThreshold)) return false;
     if (status === "in" && product.stockQuantity <= product.lowStockThreshold) return false;
@@ -33,6 +45,12 @@ export async function getInventoryData(filters: InventoryFilters = {}) {
   });
 
   matching.sort((left, right) => {
+    if (query) {
+      const relevance =
+        (fuzzySearchScore(query, [left.name, left.sku, left.barcode]) ?? 0) -
+        (fuzzySearchScore(query, [right.name, right.sku, right.barcode]) ?? 0);
+      if (relevance !== 0) return relevance;
+    }
     if (filters.sort === "name") return left.name.localeCompare(right.name);
     if (filters.sort === "stock") return left.stockQuantity - right.stockQuantity;
     return right.updatedAt.getTime() - left.updatedAt.getTime();
@@ -44,6 +62,7 @@ export async function getInventoryData(filters: InventoryFilters = {}) {
 
   return {
     products: matching.slice((page - 1) * pageSize, page * pageSize),
+    registers,
     categories,
     page,
     pageCount,
@@ -58,6 +77,123 @@ export async function getInventoryData(filters: InventoryFilters = {}) {
         (product) => product.stockQuantity > 0 && product.stockQuantity <= product.lowStockThreshold,
       ).length,
       outOfStock: allProducts.filter((product) => product.stockQuantity === 0).length,
+    },
+  };
+}
+
+export type StockFilters = {
+  register?: string;
+  query?: string;
+  movement?: "all" | InventoryMovementType;
+};
+
+export async function getStockData(filters: StockFilters = {}) {
+  const registerId = filters.register && filters.register !== "all" ? filters.register : undefined;
+  const query = filters.query?.trim();
+  const movementType = filters.movement && filters.movement !== "all"
+    ? filters.movement
+    : undefined;
+  const productWhere: Prisma.ProductWhereInput = {
+    active: true,
+    ...(registerId ? { registerId } : {}),
+  };
+  const movementWhere: Prisma.InventoryMovementWhereInput = {
+    ...(registerId ? { registerId } : {}),
+    ...(movementType ? { type: movementType } : {}),
+  };
+
+  const [registers, unfilteredProducts, unfilteredMovements, unfilteredMovementCount] = await Promise.all([
+    prisma.cashRegister.findMany({
+      where: { active: true },
+      orderBy: { name: "asc" },
+      select: { id: true, code: true, name: true },
+    }),
+    prisma.product.findMany({
+      where: productWhere,
+      orderBy: [{ register: { name: "asc" } }, { name: "asc" }],
+      include: { register: { select: { id: true, code: true, name: true } } },
+    }),
+    prisma.inventoryMovement.findMany({
+      where: movementWhere,
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      ...(!query ? { take: 100 } : {}),
+      include: {
+        product: {
+          select: {
+            id: true,
+            name: true,
+            sku: true,
+            kind: true,
+            quantityMetric: true,
+            quantityValue: true,
+            servingSize: true,
+          },
+        },
+        register: { select: { id: true, code: true, name: true } },
+        createdBy: { select: { name: true } },
+        sale: { select: { receiptNumber: true } },
+      },
+    }),
+    prisma.inventoryMovement.count({ where: movementWhere }),
+  ]);
+
+  const productMatches = unfilteredProducts
+    .map((product) => ({
+      product,
+      score: query
+        ? fuzzySearchScore(query, [
+            product.name,
+            product.sku,
+            product.barcode,
+            product.category,
+            product.description,
+            product.kind,
+            product.register.name,
+            product.register.code,
+          ])
+        : 0,
+    }))
+    .filter((match) => match.score !== null)
+    .sort((left, right) => (left.score ?? 0) - (right.score ?? 0));
+  const products = productMatches.map((match) => match.product);
+  const movementMatches = unfilteredMovements
+    .map((movement) => ({
+      movement,
+      score: query
+        ? fuzzySearchScore(query, [
+            movement.product.name,
+            movement.product.sku,
+            movement.register.name,
+            movement.register.code,
+            movement.type,
+            movement.reason,
+            movement.createdBy.name,
+            movement.sale ? `Receipt ${movement.sale.receiptNumber}` : null,
+            movement.quantityDelta,
+            movement.balanceAfter,
+          ])
+        : 0,
+    }))
+    .filter((match) => match.score !== null)
+    .sort((left, right) => (left.score ?? 0) - (right.score ?? 0));
+  const movementCount = query ? movementMatches.length : unfilteredMovementCount;
+  const movements = movementMatches.slice(0, 100).map((match) => match.movement);
+
+  return {
+    registers,
+    products,
+    movements,
+    movementCount,
+    metrics: {
+      unitsOnHand: products.reduce((sum, product) => sum + product.stockQuantity, 0),
+      stockValueLaari: products.reduce(
+        (sum, product) => sum + product.costPriceLaari * product.stockQuantity,
+        0,
+      ),
+      lowStock: products.filter(
+        (product) => product.stockQuantity > 0 && product.stockQuantity <= product.lowStockThreshold,
+      ).length,
+      outOfStock: products.filter((product) => product.stockQuantity === 0).length,
     },
   };
 }
@@ -100,7 +236,11 @@ export async function getRegistersData(selectedRegisterId?: string) {
         })
       : Promise.resolve([]),
     prisma.product.findMany({
-      where: { active: true, stockQuantity: { gt: 0 } },
+      where: {
+        active: true,
+        stockQuantity: { gt: 0 },
+        ...(selected ? { registerId: selected.id } : {}),
+      },
       orderBy: { name: "asc" },
       select: { id: true, name: true, sku: true, stockQuantity: true, retailPriceLaari: true },
     }),

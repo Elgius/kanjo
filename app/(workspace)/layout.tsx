@@ -1,8 +1,6 @@
-import { headers } from "next/headers";
-import { redirect } from "next/navigation";
-
 import { AppShell } from "@/components/pos/app-shell";
-import { auth } from "@/lib/auth";
+import { canAccess, firstAccessiblePath, requireAuthorization } from "@/lib/authorization";
+import { PAGE_KEYS } from "@/lib/permissions";
 import { getSidebarRegisters } from "@/lib/pos/queries";
 
 export default async function WorkspaceLayout({
@@ -10,15 +8,20 @@ export default async function WorkspaceLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const session = await auth.api.getSession({
-    headers: await headers(),
-  });
+  const authorization = await requireAuthorization();
+  const allowedPages = PAGE_KEYS.filter((page) => canAccess(authorization, page));
+  const registers = canAccess(authorization, "REGISTERS")
+    ? await getSidebarRegisters()
+    : [];
 
-  if (!session) {
-    redirect("/login");
-  }
-
-  const registers = await getSidebarRegisters();
-
-  return <AppShell user={session.user} registers={registers}>{children}</AppShell>;
+  return (
+    <AppShell
+      user={authorization.user}
+      registers={registers}
+      allowedPages={allowedPages}
+      homeHref={firstAccessiblePath(authorization) ?? "/access-denied"}
+    >
+      {children}
+    </AppShell>
+  );
 }

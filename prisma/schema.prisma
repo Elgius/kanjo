@@ -11,19 +11,101 @@ model User {
   id            String              @id
   name          String
   email         String
+  username      String?             @unique
+  displayUsername String?
   emailVerified Boolean             @default(false)
   image         String?
+  roleId        String              @db.Uuid
+  isSiteAdmin   Boolean             @default(false)
   createdAt     DateTime            @default(now())
   updatedAt     DateTime            @updatedAt
+  role          Role                @relation(fields: [roleId], references: [id], onDelete: Restrict)
   sessions      Session[]
   accounts      Account[]
   openedShifts  RegisterShift[]     @relation("ShiftOpenedBy")
   closedShifts  RegisterShift[]     @relation("ShiftClosedBy")
   sales         Sale[]              @relation("SaleCreatedBy")
   stockChanges  InventoryMovement[]
+  auditLogs     AuditLog[]          @relation("AuditActor")
 
   @@unique([email])
+  @@index([roleId])
+  @@index([isSiteAdmin])
   @@map("user")
+}
+
+enum PageKey {
+  OVERVIEW
+  REGISTERS
+  INVENTORY
+  STOCK
+  REPORTING
+  SETTINGS
+  AUDIT_LOG
+}
+
+enum PermissionLevel {
+  NONE
+  VIEW
+  EDIT
+}
+
+enum AuditOutcome {
+  SUCCESS
+  FAILURE
+  DENIED
+}
+
+model Role {
+  id             String           @id @default(uuid()) @db.Uuid
+  name           String
+  normalizedName String           @unique
+  description    String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  users          User[]
+  permissions    RolePermission[]
+
+  @@index([name])
+  @@map("roles")
+}
+
+model RolePermission {
+  roleId String          @db.Uuid
+  page   PageKey
+  level  PermissionLevel @default(NONE)
+  role   Role            @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, page])
+  @@index([page, level])
+  @@map("role_permissions")
+}
+
+model AuditLog {
+  id            String       @id @default(uuid()) @db.Uuid
+  occurredAt    DateTime     @default(now())
+  outcome       AuditOutcome
+  event         String
+  page          PageKey?
+  actorId       String?
+  actorLabel    String?
+  targetType    String?
+  targetId      String?
+  summary       String
+  metadata      Json?
+  ipAddress     String?
+  userAgent     String?
+  searchText    String       @db.Text
+  actor         User?        @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([occurredAt(sort: Desc), id(sort: Desc)])
+  @@index([actorId, occurredAt(sort: Desc)])
+  @@index([outcome, occurredAt(sort: Desc)])
+  @@index([event, occurredAt(sort: Desc)])
+  @@index([page, occurredAt(sort: Desc)])
+  @@index([targetType, targetId, occurredAt(sort: Desc)])
+  @@index([searchText(ops: raw("gin_trgm_ops"))], type: Gin, map: "audit_logs_search_text_trgm_idx")
+  @@map("audit_logs")
 }
 
 enum ShiftStatus {
@@ -50,8 +132,14 @@ enum InventoryMovementType {
   REFUND
 }
 
+enum ProductKind {
+  GOODS
+  CONSUMABLE
+}
+
 model Product {
   id                String              @id @default(uuid()) @db.Uuid
+  registerId        String              @db.Uuid
   sku               String              @unique
   barcode           String?             @unique
   name              String
@@ -61,25 +149,33 @@ model Product {
   costPriceLaari    Int                 @default(0)
   stockQuantity     Int                 @default(0)
   lowStockThreshold Int                 @default(10)
+  kind              ProductKind         @default(GOODS)
+  quantityMetric    String?
+  quantityValue     Decimal?            @db.Decimal(12, 3)
+  servingSize       Decimal?            @db.Decimal(12, 3)
   active            Boolean             @default(true)
   createdAt         DateTime            @default(now())
   updatedAt         DateTime            @updatedAt
+  register          CashRegister        @relation(fields: [registerId], references: [id], onDelete: Restrict)
   saleItems         SaleItem[]
   stockMovements    InventoryMovement[]
 
   @@index([active, updatedAt(sort: Desc)])
+  @@index([registerId, active, name])
   @@index([category])
   @@map("products")
 }
 
 model CashRegister {
-  id        String          @id @default(uuid()) @db.Uuid
-  code      String          @unique
-  name      String          @unique
-  active    Boolean         @default(true)
-  createdAt DateTime        @default(now())
-  updatedAt DateTime        @updatedAt
-  shifts    RegisterShift[]
+  id             String              @id @default(uuid()) @db.Uuid
+  code           String              @unique
+  name           String              @unique
+  active         Boolean             @default(true)
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+  shifts         RegisterShift[]
+  products       Product[]
+  stockMovements InventoryMovement[]
 
   @@index([active, name])
   @@map("cash_registers")
@@ -148,17 +244,21 @@ model SaleItem {
 model InventoryMovement {
   id            String                @id @default(uuid()) @db.Uuid
   productId     String                @db.Uuid
+  registerId    String                @db.Uuid
   saleId        String?               @db.Uuid
   createdById   String
   type          InventoryMovementType
   quantityDelta Int
+  balanceAfter  Int
   reason        String?
   createdAt     DateTime              @default(now())
   product       Product               @relation(fields: [productId], references: [id], onDelete: Restrict)
+  register      CashRegister          @relation(fields: [registerId], references: [id], onDelete: Restrict)
   sale          Sale?                 @relation(fields: [saleId], references: [id], onDelete: Restrict)
   createdBy     User                  @relation(fields: [createdById], references: [id], onDelete: Restrict)
 
   @@index([productId, createdAt(sort: Desc)])
+  @@index([registerId, createdAt(sort: Desc)])
   @@index([saleId])
   @@index([createdById])
   @@map("inventory_movements")

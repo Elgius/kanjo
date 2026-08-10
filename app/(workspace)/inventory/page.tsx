@@ -13,7 +13,9 @@ import {
 import { formatMvr } from "@/lib/pos/money";
 import { getInventoryData, type InventoryFilters } from "@/lib/pos/queries";
 import { cn } from "@/lib/utils";
-import { adjustStockAction, createProductAction } from "./actions";
+import { canAccess, requirePageAccess } from "@/lib/authorization";
+import { adjustStockAction } from "./actions";
+import { NewProductMenu } from "./product-form";
 
 const fieldClass =
   "h-10 rounded-lg border border-border bg-card px-3 text-xs outline-none focus:border-ring focus:ring-2 focus:ring-ring/15";
@@ -27,7 +29,7 @@ function inventoryHref(
   page: number,
 ) {
   const params = new URLSearchParams();
-  for (const key of ["query", "category", "status", "sort"]) {
+  for (const key of ["query", "category", "register", "status", "sort"]) {
     const value = single(current[key]);
     if (value) params.set(key, value);
   }
@@ -36,12 +38,15 @@ function inventoryHref(
 }
 
 export default async function InventoryPage({ searchParams }: PageProps<"/inventory">) {
+  const authorization = await requirePageAccess("INVENTORY");
+  const canEdit = canAccess(authorization, "INVENTORY", "EDIT");
   const params = await searchParams;
   const rawStatus = single(params.status);
   const rawSort = single(params.sort);
   const filters: InventoryFilters = {
     query: single(params.query),
     category: single(params.category),
+    register: single(params.register),
     status: ["low", "out", "in"].includes(rawStatus ?? "")
       ? (rawStatus as InventoryFilters["status"])
       : "all",
@@ -60,29 +65,7 @@ export default async function InventoryPage({ searchParams }: PageProps<"/invent
         eyebrow="Catalogue"
         title="Inventory"
         description="Manage products, pricing, and stock from one live catalogue."
-        actions={
-          <details className="group relative">
-            <summary className="flex h-10 cursor-pointer list-none items-center rounded-lg bg-primary px-4 text-xs font-semibold text-primary-foreground">
-              Add product
-            </summary>
-            <form
-              action={createProductAction}
-              className="absolute right-0 z-20 mt-2 grid w-[min(92vw,620px)] gap-3 rounded-xl border border-border bg-card p-5 shadow-xl sm:grid-cols-2"
-            >
-              <h2 className="text-sm font-semibold sm:col-span-2">New product</h2>
-              <label className="grid gap-1.5 text-xs">Name<input className={fieldClass} name="name" required /></label>
-              <label className="grid gap-1.5 text-xs">SKU<input className={fieldClass} name="sku" required /></label>
-              <label className="grid gap-1.5 text-xs">Barcode<input className={fieldClass} name="barcode" /></label>
-              <label className="grid gap-1.5 text-xs">Category<input className={fieldClass} name="category" required /></label>
-              <label className="grid gap-1.5 text-xs">Retail price (MVR)<input className={fieldClass} name="retailPrice" inputMode="decimal" defaultValue="0.00" required /></label>
-              <label className="grid gap-1.5 text-xs">Cost price (MVR)<input className={fieldClass} name="costPrice" inputMode="decimal" defaultValue="0.00" required /></label>
-              <label className="grid gap-1.5 text-xs">Opening stock<input className={fieldClass} name="stockQuantity" type="number" min="0" defaultValue="0" required /></label>
-              <label className="grid gap-1.5 text-xs">Low-stock threshold<input className={fieldClass} name="lowStockThreshold" type="number" min="0" defaultValue="10" required /></label>
-              <label className="grid gap-1.5 text-xs sm:col-span-2">Description<textarea className="min-h-20 rounded-lg border border-border bg-card p-3 text-xs outline-none" name="description" /></label>
-              <button className="h-10 rounded-lg bg-primary px-4 text-xs font-semibold text-primary-foreground sm:col-start-2" type="submit">Save product</button>
-            </form>
-          </details>
-        }
+        actions={canEdit ? <NewProductMenu registers={data.registers} /> : null}
       />
 
       {success || error ? (
@@ -108,6 +91,10 @@ export default async function InventoryPage({ searchParams }: PageProps<"/invent
           <option value="all">All categories</option>
           {data.categories.map((category) => <option key={category} value={category}>{category}</option>)}
         </select>
+        <select name="register" aria-label="Register" defaultValue={filters.register ?? "all"} className={`${fieldClass} h-11 xl:w-[170px]`}>
+          <option value="all">All registers</option>
+          {data.registers.map((register) => <option key={register.id} value={register.id}>{register.name}</option>)}
+        </select>
         <select name="status" aria-label="Stock status" defaultValue={filters.status} className={`${fieldClass} h-11 xl:w-[150px]`}>
           <option value="all">All stock</option><option value="in">In stock</option><option value="low">Low stock</option><option value="out">Out of stock</option>
         </select>
@@ -119,11 +106,12 @@ export default async function InventoryPage({ searchParams }: PageProps<"/invent
 
       <Surface className="min-h-[360px] overflow-hidden px-5">
         {data.products.length ? (
-          <Table className="min-w-[1050px] text-left text-xs">
+          <Table className="min-w-[1160px] text-left text-xs">
             <TableHeader><TableRow className="hover:bg-transparent">
               <TableHead className="h-12 w-[310px] p-0 text-[10px] font-normal text-muted-foreground">PRODUCT</TableHead>
               <TableHead className="h-12 w-[140px] p-0 text-[10px] font-normal text-muted-foreground">SKU</TableHead>
-              <TableHead className="h-12 w-[150px] p-0 text-[10px] font-normal text-muted-foreground">CATEGORY</TableHead>
+              <TableHead className="h-12 w-[150px] p-0 text-[10px] font-normal text-muted-foreground">REGISTER</TableHead>
+              <TableHead className="h-12 w-[120px] p-0 text-[10px] font-normal text-muted-foreground">TYPE</TableHead>
               <TableHead className="h-12 w-[110px] p-0 text-[10px] font-normal text-muted-foreground">ON HAND</TableHead>
               <TableHead className="h-12 w-[130px] p-0 text-[10px] font-normal text-muted-foreground">RETAIL</TableHead>
               <TableHead className="h-12 p-0 text-right text-[10px] font-normal text-muted-foreground">ADJUST</TableHead>
@@ -135,17 +123,18 @@ export default async function InventoryPage({ searchParams }: PageProps<"/invent
                   <TableRow key={product.id} className="h-[66px] hover:bg-transparent">
                     <TableCell className="p-0"><span className="flex flex-col"><span className="font-semibold">{product.name}</span><span className="text-[10px] text-muted-foreground">{product.description || "No description"}</span></span></TableCell>
                     <TableCell className="p-0 font-mono text-[11px]">{product.sku}</TableCell>
-                    <TableCell className="p-0">{product.category}</TableCell>
+                    <TableCell className="p-0">{product.register.name}</TableCell>
+                    <TableCell className="p-0">{product.kind === "CONSUMABLE" ? "Consumable" : "Goods"}</TableCell>
                     <TableCell className={cn("p-0 font-semibold", low && "text-chart-1", product.stockQuantity === 0 && "text-destructive")}>
                       {product.stockQuantity}{product.stockQuantity === 0 ? " · OUT" : low ? " · LOW" : ""}
                     </TableCell>
                     <TableCell className="p-0 font-mono">{formatMvr(product.retailPriceLaari)}</TableCell>
                     <TableCell className="p-0 text-right">
-                      <form action={adjustStockAction.bind(null, product.id)} className="inline-flex items-center justify-end gap-2">
+                      {canEdit ? <form action={adjustStockAction.bind(null, product.id)} className="inline-flex items-center justify-end gap-2">
                         <input aria-label={`Stock adjustment for ${product.name}`} name="quantityDelta" type="number" placeholder="+ / −" required className="h-8 w-20 rounded-md border border-border bg-card px-2 text-xs" />
                         <input type="hidden" name="reason" value="Manual inventory adjustment" />
                         <button type="submit" className="h-8 rounded-md border border-border px-3 text-[11px] hover:bg-accent">Update</button>
-                      </form>
+                      </form> : <span className="text-[10px] text-muted-foreground">View only</span>}
                     </TableCell>
                   </TableRow>
                 );

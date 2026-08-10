@@ -15,7 +15,14 @@ function nonNegativeInteger(value: string) {
   return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
+function positiveDecimal(value: string) {
+  if (!/^\d+(?:\.\d{1,3})?$/.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? value : null;
+}
+
 export type ProductInput = {
+  registerId: string;
   sku: string;
   barcode: string | null;
   name: string;
@@ -25,19 +32,25 @@ export type ProductInput = {
   costPriceLaari: number;
   stockQuantity: number;
   lowStockThreshold: number;
+  kind: "GOODS" | "CONSUMABLE";
+  quantityMetric: string | null;
+  quantityValue: string | null;
+  servingSize: string | null;
 };
 
 export function parseProductForm(formData: FormData): ValidationResult<ProductInput> {
   const name = text(formData, "name");
+  const registerId = text(formData, "registerId");
   const sku = text(formData, "sku").toUpperCase();
   const category = text(formData, "category");
   const retailPriceLaari = parseMvr(formData.get("retailPrice"));
   const costPriceLaari = parseMvr(formData.get("costPrice"));
   const stockQuantity = nonNegativeInteger(text(formData, "stockQuantity"));
   const lowStockThreshold = nonNegativeInteger(text(formData, "lowStockThreshold"));
+  const kind = text(formData, "kind");
 
-  if (!name || !sku || !category) {
-    return { ok: false, error: "Name, SKU, and category are required." };
+  if (!name || !sku || !category || !registerId) {
+    return { ok: false, error: "Register, name, SKU, and category are required." };
   }
   if (retailPriceLaari === null || costPriceLaari === null) {
     return { ok: false, error: "Prices must be valid non-negative MVR amounts." };
@@ -45,10 +58,34 @@ export function parseProductForm(formData: FormData): ValidationResult<ProductIn
   if (stockQuantity === null || lowStockThreshold === null) {
     return { ok: false, error: "Stock values must be non-negative whole numbers." };
   }
+  if (kind !== "GOODS" && kind !== "CONSUMABLE") {
+    return { ok: false, error: "Select whether this item is goods or consumable." };
+  }
+
+  const quantityMetric = kind === "CONSUMABLE" ? text(formData, "quantityMetric") : null;
+  const quantityValue = kind === "CONSUMABLE"
+    ? positiveDecimal(text(formData, "quantityValue"))
+    : null;
+  const servingSize = kind === "CONSUMABLE"
+    ? positiveDecimal(text(formData, "servingSize"))
+    : null;
+  if (kind === "CONSUMABLE" && (!quantityMetric || !quantityValue || !servingSize)) {
+    return {
+      ok: false,
+      error: "Consumables need a quantity unit, total quantity, and serving size.",
+    };
+  }
+  if (
+    kind === "CONSUMABLE" &&
+    Number(servingSize) > Number(quantityValue)
+  ) {
+    return { ok: false, error: "Serving size cannot exceed the total quantity." };
+  }
 
   return {
     ok: true,
     data: {
+      registerId,
       name,
       sku,
       category,
@@ -58,6 +95,10 @@ export function parseProductForm(formData: FormData): ValidationResult<ProductIn
       costPriceLaari,
       stockQuantity,
       lowStockThreshold,
+      kind,
+      quantityMetric,
+      quantityValue,
+      servingSize,
     },
   };
 }

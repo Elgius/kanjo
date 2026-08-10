@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
+  Boxes,
   ChartNoAxesCombined,
   ChevronDown,
   LayoutDashboard,
@@ -14,6 +15,7 @@ import {
 } from "lucide-react";
 
 import { authClient } from "@/lib/auth-client";
+import type { PageKey } from "@/generated/prisma/enums";
 import { formatMvr } from "@/lib/pos/money";
 import {
   DropdownMenu,
@@ -38,12 +40,13 @@ import {
 } from "@/components/ui/sidebar";
 
 const navigation = [
-  { href: "/", label: "Overview", icon: LayoutDashboard },
-  { href: "/registers", label: "Registers", icon: Store },
-  { href: "/inventory", label: "Inventory", icon: Package },
-  { href: "/reporting", label: "Reporting", icon: ChartNoAxesCombined },
-  { href: "/settings", label: "Settings", icon: Settings },
-];
+  { page: "OVERVIEW", href: "/", label: "Overview", icon: LayoutDashboard },
+  { page: "REGISTERS", href: "/registers", label: "Registers", icon: Store },
+  { page: "INVENTORY", href: "/inventory", label: "Inventory", icon: Package },
+  { page: "STOCK", href: "/stock", label: "Stock", icon: Boxes },
+  { page: "REPORTING", href: "/reporting", label: "Reporting", icon: ChartNoAxesCombined },
+  { page: "SETTINGS", href: "/settings", label: "Settings", icon: Settings },
+] as const;
 
 type SidebarRegister = {
   id: string;
@@ -53,9 +56,9 @@ type SidebarRegister = {
   salesLaari: number;
 };
 
-function Brand({ compact = false }: { compact?: boolean }) {
+function Brand({ compact = false, homeHref = "/" }: { compact?: boolean; homeHref?: string }) {
   return (
-    <Link href="/" className="flex min-w-0 items-center gap-[11px] px-2">
+    <Link href={homeHref} className="flex min-w-0 items-center gap-[11px] px-2">
       <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary font-serif text-lg font-bold text-primary-foreground">
         K
       </span>
@@ -72,13 +75,23 @@ function Brand({ compact = false }: { compact?: boolean }) {
   );
 }
 
-function Navigation() {
+function Navigation({ allowedPages }: { allowedPages: PageKey[] }) {
   const pathname = usePathname();
+  const visibleNavigation = navigation
+    .filter((item) =>
+      allowedPages.includes(item.page) ||
+      (item.page === "SETTINGS" && allowedPages.includes("AUDIT_LOG")),
+    )
+    .map((item) =>
+      item.page === "SETTINGS" && !allowedPages.includes("SETTINGS")
+        ? { ...item, href: "/settings/audit-log" }
+        : item,
+    );
 
   return (
     <SidebarGroup className="px-5 py-0">
       <SidebarMenu className="gap-1.5">
-        {navigation.map(({ href, label, icon: Icon }) => {
+        {visibleNavigation.map(({ href, label, icon: Icon }) => {
           const active = href === "/" ? pathname === "/" : pathname.startsWith(href);
 
           return (
@@ -190,11 +203,14 @@ type SidebarProps = {
   user: {
     email: string;
     name: string;
+    username: string | null;
   };
   registers: SidebarRegister[];
+  allowedPages: PageKey[];
+  homeHref: string;
 };
 
-export function Sidebar({ user, registers }: SidebarProps) {
+export function Sidebar({ user, registers, allowedPages, homeHref }: SidebarProps) {
   const router = useRouter();
   const initials = user.name
     .split(/\s+/)
@@ -212,10 +228,10 @@ export function Sidebar({ user, registers }: SidebarProps) {
   return (
     <SidebarPrimitive collapsible="icon" className="border-sidebar-border">
       <SidebarHeader className="gap-0 px-5 py-7 group-data-[collapsible=icon]:px-2">
-        <Brand />
+        <Brand homeHref={homeHref} />
       </SidebarHeader>
       <SidebarContent className="gap-7">
-        <Navigation />
+        <Navigation allowedPages={allowedPages} />
         <RegistryPicker registers={registers} />
       </SidebarContent>
       <SidebarFooter className="px-5 pb-7 group-data-[collapsible=icon]:px-2">
@@ -226,7 +242,7 @@ export function Sidebar({ user, registers }: SidebarProps) {
           <span className="flex min-w-0 flex-1 flex-col gap-0.5 group-data-[collapsible=icon]:hidden">
             <span className="truncate text-xs font-semibold">{user.name}</span>
             <span className="truncate text-[10px] text-muted-foreground">
-              {user.email}
+              {user.username ? `@${user.username}` : user.email}
             </span>
           </span>
           <button
@@ -245,7 +261,7 @@ export function Sidebar({ user, registers }: SidebarProps) {
   );
 }
 
-export function MobileHeader() {
+export function MobileHeader({ homeHref }: { homeHref: string }) {
   const router = useRouter();
 
   async function signOut() {
@@ -258,7 +274,7 @@ export function MobileHeader() {
     <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center justify-between border-b border-sidebar-border bg-sidebar/95 px-4 backdrop-blur md:hidden">
       <div className="flex items-center gap-2">
         <SidebarTrigger className="size-9 rounded-lg border border-sidebar-border bg-card" />
-        <Brand compact />
+        <Brand compact homeHref={homeHref} />
       </div>
       <button
         type="button"

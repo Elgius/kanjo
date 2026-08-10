@@ -9,6 +9,7 @@ databaseDescribe("Neon sale transaction", () => {
   let db: PrismaClient;
   let recordSale: typeof import("@/lib/pos/sales").recordSale;
   let userId: string;
+  let roleId: string;
   let registerId: string;
   let shiftId: string;
   let productId: string;
@@ -19,8 +20,12 @@ databaseDescribe("Neon sale transaction", () => {
     ({ prisma: db } = await import("@/lib/db"));
     ({ recordSale } = await import("@/lib/pos/sales"));
 
+    const role = await db.role.create({
+      data: { name: marker, normalizedName: marker },
+    });
+    roleId = role.id;
     const user = await db.user.create({
-      data: { id: marker, name: "Integration Test", email: `${marker}@example.invalid` },
+      data: { id: marker, name: "Integration Test", email: `${marker}@example.invalid`, roleId },
     });
     userId = user.id;
     const register = await db.cashRegister.create({
@@ -34,6 +39,7 @@ databaseDescribe("Neon sale transaction", () => {
     const product = await db.product.create({
       data: {
         sku: marker.toUpperCase(),
+        registerId,
         name: "Integration product",
         category: "Test",
         retailPriceLaari: 2_500,
@@ -47,12 +53,14 @@ databaseDescribe("Neon sale transaction", () => {
 
   afterAll(async () => {
     if (!db) return;
+    await db.auditLog.deleteMany({ where: { actorId: userId } });
     await db.inventoryMovement.deleteMany({ where: { createdById: userId } });
     await db.sale.deleteMany({ where: { createdById: userId } });
+    await db.product.deleteMany({ where: { id: productId } });
     await db.registerShift.deleteMany({ where: { registerId } });
     await db.cashRegister.deleteMany({ where: { id: registerId } });
-    await db.product.deleteMany({ where: { id: productId } });
     await db.user.deleteMany({ where: { id: userId } });
+    await db.role.deleteMany({ where: { id: roleId } });
     await db.$disconnect();
   });
 
@@ -62,31 +70,43 @@ databaseDescribe("Neon sale transaction", () => {
       createdById: userId,
       paymentMethod: "CASH",
       items: [{ productId, quantity: 2 }],
+      audit: { actorLabel: marker },
     });
 
     expect(sale.totalLaari).toBe(5_000);
-    const [product, storedSale, movement] = await Promise.all([
+    const [product, storedSale, movement, audit] = await Promise.all([
       db.product.findUniqueOrThrow({ where: { id: productId } }),
       db.sale.findUniqueOrThrow({ where: { id: sale.id }, include: { items: true } }),
       db.inventoryMovement.findFirstOrThrow({ where: { saleId: sale.id } }),
+      db.auditLog.findFirstOrThrow({ where: { event: "SALE_RECORD", targetId: sale.id } }),
     ]);
     expect(product.stockQuantity).toBe(3);
+    expect(product.registerId).toBe(registerId);
     expect(storedSale.items).toHaveLength(1);
     expect(storedSale.items[0].lineTotalLaari).toBe(5_000);
     expect(movement.quantityDelta).toBe(-2);
+    expect(movement.registerId).toBe(registerId);
+    expect(movement.balanceAfter).toBe(3);
+    expect(audit.outcome).toBe("SUCCESS");
+    expect(audit.actorId).toBe(userId);
   });
 
   test("rolls back the sale when stock is insufficient", async () => {
-    const before = await db.sale.count({ where: { createdById: userId } });
+    const [before, auditBefore] = await Promise.all([
+      db.sale.count({ where: { createdById: userId } }),
+      db.auditLog.count({ where: { actorId: userId } }),
+    ]);
     await expect(
       recordSale(db, {
         shiftId,
         createdById: userId,
         paymentMethod: "CARD",
         items: [{ productId, quantity: 99 }],
+        audit: { actorLabel: marker },
       }),
     ).rejects.toThrow("only has 3 in stock");
     expect(await db.sale.count({ where: { createdById: userId } })).toBe(before);
+    expect(await db.auditLog.count({ where: { actorId: userId } })).toBe(auditBefore);
     expect((await db.product.findUniqueOrThrow({ where: { id: productId } })).stockQuantity).toBe(3);
   });
 });

@@ -12,6 +12,7 @@ import {
 import { formatMvr } from "@/lib/pos/money";
 import { getRegistersData } from "@/lib/pos/queries";
 import { cn } from "@/lib/utils";
+import { canAccess, requirePageAccess } from "@/lib/authorization";
 import {
   closeShiftAction,
   createRegisterAction,
@@ -41,6 +42,8 @@ function elapsed(openedAt: Date) {
 }
 
 export default async function RegistersPage({ searchParams }: PageProps<"/registers">) {
+  const authorization = await requirePageAccess("REGISTERS");
+  const canEdit = canAccess(authorization, "REGISTERS", "EDIT");
   const params = await searchParams;
   const data = await getRegistersData(single(params.register));
   const selected = data.selected;
@@ -58,7 +61,7 @@ export default async function RegistersPage({ searchParams }: PageProps<"/regist
         eyebrow="Registry"
         title="Cash registers"
         description="Open shifts, record sales, and reconcile each cash drawer."
-        actions={
+        actions={canEdit ? (
           <details className="group relative">
             <summary className="flex h-10 cursor-pointer list-none items-center rounded-lg bg-primary px-4 text-xs font-semibold text-primary-foreground">Add register</summary>
             <form action={createRegisterAction} className="absolute right-0 z-20 mt-2 grid w-[min(90vw,380px)] gap-3 rounded-xl border border-border bg-card p-5 shadow-xl">
@@ -68,7 +71,7 @@ export default async function RegistersPage({ searchParams }: PageProps<"/regist
               <button type="submit" className="h-10 rounded-lg bg-primary text-xs font-semibold text-primary-foreground">Save register</button>
             </form>
           </details>
-        }
+        ) : null}
       />
 
       {success || error ? (
@@ -117,17 +120,17 @@ export default async function RegistersPage({ searchParams }: PageProps<"/regist
                   <h2 className="font-serif text-[28px] font-semibold leading-[34px]">{selected.name}</h2>
                   <p className="text-xs text-muted-foreground">{shift ? `Shift owner: ${shift.openedBy.name}` : "Open a shift before recording sales."}</p>
                 </div>
-                {shift ? (
+                {canEdit && shift ? (
                   <form action={closeShiftAction.bind(null, shift.id, selected.id)} className="flex items-end gap-2">
                     <label className="grid gap-1 text-[10px] text-muted-foreground">Closing cash (MVR)<input name="closingCash" inputMode="decimal" defaultValue={(selectedCashExpectedLaari / 100).toFixed(2)} className={`${fieldClass} w-32`} required /></label>
                     <button type="submit" className="h-10 rounded-lg bg-primary px-3 text-[11px] font-semibold text-primary-foreground">Close shift</button>
                   </form>
-                ) : (
+                ) : canEdit ? (
                   <form action={openShiftAction.bind(null, selected.id)} className="flex items-end gap-2">
                     <label className="grid gap-1 text-[10px] text-muted-foreground">Opening cash (MVR)<input name="openingCash" inputMode="decimal" defaultValue="0.00" className={`${fieldClass} w-32`} required /></label>
                     <button type="submit" className="h-10 rounded-lg bg-primary px-3 text-[11px] font-semibold text-primary-foreground">Open shift</button>
                   </form>
-                )}
+                ) : <span className="rounded-lg bg-accent px-3 py-2 text-[10px] text-muted-foreground">VIEW ONLY</span>}
               </div>
 
               {shift ? (
@@ -138,12 +141,12 @@ export default async function RegistersPage({ searchParams }: PageProps<"/regist
                     ))}
                   </div>
 
-                  <form action={recordSaleAction.bind(null, shift.id, selected.id)} className="grid gap-3 rounded-[9px] bg-accent p-4 sm:grid-cols-[1fr_100px_150px_auto] sm:items-end">
+                  {canEdit ? <form action={recordSaleAction.bind(null, shift.id, selected.id)} className="grid gap-3 rounded-[9px] bg-accent p-4 sm:grid-cols-[1fr_100px_150px_auto] sm:items-end">
                     <label className="grid gap-1.5 text-[10px] text-muted-foreground">PRODUCT<select name="productId" className={fieldClass} required defaultValue=""><option value="" disabled>Select product</option>{data.products.map((product) => <option key={product.id} value={product.id}>{product.name} · {product.stockQuantity} available · {formatMvr(product.retailPriceLaari)}</option>)}</select></label>
                     <label className="grid gap-1.5 text-[10px] text-muted-foreground">QUANTITY<input name="quantity" type="number" min="1" defaultValue="1" className={fieldClass} required /></label>
                     <label className="grid gap-1.5 text-[10px] text-muted-foreground">PAYMENT<select name="paymentMethod" className={fieldClass} defaultValue="CASH"><option value="CASH">Cash</option><option value="CARD">Card</option><option value="MOBILE">Mobile pay</option></select></label>
                     <button type="submit" disabled={!data.products.length} className="h-10 rounded-lg bg-primary px-4 text-xs font-semibold text-primary-foreground disabled:opacity-50">Record sale</button>
-                  </form>
+                  </form> : null}
 
                   <div className="min-w-0">
                     <h3 className="pb-2.5 text-sm font-semibold">Recent transactions</h3>

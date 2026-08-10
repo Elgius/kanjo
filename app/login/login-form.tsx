@@ -18,16 +18,14 @@ export function LoginForm() {
     setIsPending(true);
 
     const formData = new FormData(event.currentTarget);
-    const email = String(formData.get("email"));
+    const identifier = String(formData.get("identifier")).trim();
     const password = String(formData.get("password"));
     const rememberMe = formData.get("rememberMe") === "on";
 
     try {
-      const { error: signInError } = await authClient.signIn.email({
-        email,
-        password,
-        rememberMe,
-      });
+      const { error: signInError } = identifier.includes("@")
+        ? await authClient.signIn.email({ email: identifier, password, rememberMe })
+        : await authClient.signIn.username({ username: identifier, password, rememberMe });
 
       if (signInError) {
         setError(signInError.message || "Unable to sign in. Check your credentials.");
@@ -64,13 +62,12 @@ export function LoginForm() {
       </div>
 
       <label className="flex flex-col gap-2 text-[13px] font-semibold">
-        Email address
+        Username or email
         <input
-          type="email"
-          name="email"
-          autoComplete="email"
-          inputMode="email"
-          placeholder="you@kanjo.mv"
+          type="text"
+          name="identifier"
+          autoComplete="username"
+          placeholder="username or you@kanjo.mv"
           required
           disabled={isPending}
           className="h-12 rounded-lg border border-input bg-card px-3.5 text-sm font-normal outline-none placeholder:text-muted-foreground focus:border-ring focus:ring-2 focus:ring-ring/15 disabled:cursor-not-allowed disabled:opacity-60"

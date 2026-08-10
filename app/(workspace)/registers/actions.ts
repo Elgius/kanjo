@@ -5,8 +5,9 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 import { prisma } from "@/lib/db";
+import { getAuditRequestContext, safeWriteAudit, writeAudit } from "@/lib/audit";
+import { requireActionAccess, type AuthorizationContext } from "@/lib/authorization";
 import { PosError, recordSale } from "@/lib/pos/sales";
-import { requireUser } from "@/lib/pos/session";
 import {
   parseClosingCash,
   parseOpeningCash,
@@ -22,23 +23,67 @@ function registersRedirect(kind: "success" | "error", message: string, registerI
 
 function refreshRegisters() {
   revalidatePath("/registers");
+  revalidatePath("/inventory");
+  revalidatePath("/stock");
   revalidatePath("/");
   revalidatePath("/", "layout");
 }
 
+function actorLabel(authorization: AuthorizationContext) {
+  return authorization.user.username ?? authorization.user.email;
+}
+
+async function auditFailure(
+  authorization: AuthorizationContext,
+  event: string,
+  summary: string,
+  metadata?: unknown,
+) {
+  await safeWriteAudit({
+    outcome: "FAILURE",
+    event,
+    page: "REGISTERS",
+    actorId: authorization.user.id,
+    actorLabel: actorLabel(authorization),
+    summary,
+    metadata,
+    request: await getAuditRequestContext(),
+  });
+}
+
 export async function createRegisterAction(formData: FormData) {
-  await requireUser();
+  const authorization = await requireActionAccess("REGISTERS", "REGISTER_CREATE");
   const parsed = parseRegisterForm(formData);
-  if (!parsed.ok) registersRedirect("error", parsed.error);
+  if (!parsed.ok) {
+    await auditFailure(authorization, "REGISTER_CREATE", parsed.error);
+    registersRedirect("error", parsed.error);
+  }
 
   let register;
   try {
-    register = await prisma.cashRegister.create({ data: parsed.data });
+    const request = await getAuditRequestContext();
+    register = await prisma.$transaction(async (tx) => {
+      const created = await tx.cashRegister.create({ data: parsed.data });
+      await writeAudit(tx, {
+        outcome: "SUCCESS",
+        event: "REGISTER_CREATE",
+        page: "REGISTERS",
+        actorId: authorization.user.id,
+        actorLabel: actorLabel(authorization),
+        targetType: "register",
+        targetId: created.id,
+        summary: `Register ${created.name} created.`,
+        metadata: { code: created.code },
+        request,
+      });
+      return created;
+    });
   } catch (error) {
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-      registersRedirect("error", "That register code or name already exists.");
-    }
-    registersRedirect("error", "The register could not be created.");
+    const message = error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002"
+      ? "That register code or name already exists."
+      : "The register could not be created.";
+    await auditFailure(authorization, "REGISTER_CREATE", message, parsed.data);
+    registersRedirect("error", message);
   }
 
   refreshRegisters();
@@ -46,19 +91,38 @@ export async function createRegisterAction(formData: FormData) {
 }
 
 export async function openShiftAction(registerId: string, formData: FormData) {
-  const user = await requireUser();
+  const authorization = await requireActionAccess("REGISTERS", "SHIFT_OPEN");
   const parsed = parseOpeningCash(formData);
-  if (!parsed.ok) registersRedirect("error", parsed.error, registerId);
+  if (!parsed.ok) {
+    await auditFailure(authorization, "SHIFT_OPEN", parsed.error, { registerId });
+    registersRedirect("error", parsed.error, registerId);
+  }
 
   try {
-    await prisma.registerShift.create({
-      data: { registerId, openedById: user.id, openingCashLaari: parsed.data.openingCashLaari },
+    const request = await getAuditRequestContext();
+    await prisma.$transaction(async (tx) => {
+      const shift = await tx.registerShift.create({
+        data: { registerId, openedById: authorization.user.id, openingCashLaari: parsed.data.openingCashLaari },
+      });
+      await writeAudit(tx, {
+        outcome: "SUCCESS",
+        event: "SHIFT_OPEN",
+        page: "REGISTERS",
+        actorId: authorization.user.id,
+        actorLabel: actorLabel(authorization),
+        targetType: "register_shift",
+        targetId: shift.id,
+        summary: "Register shift opened.",
+        metadata: { registerId, openingCashLaari: parsed.data.openingCashLaari },
+        request,
+      });
     });
   } catch (error) {
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-      registersRedirect("error", "This register already has an open shift.", registerId);
-    }
-    registersRedirect("error", "The shift could not be opened.", registerId);
+    const message = error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002"
+      ? "This register already has an open shift."
+      : "The shift could not be opened.";
+    await auditFailure(authorization, "SHIFT_OPEN", message, { registerId });
+    registersRedirect("error", message, registerId);
   }
 
   refreshRegisters();
@@ -66,45 +130,74 @@ export async function openShiftAction(registerId: string, formData: FormData) {
 }
 
 export async function closeShiftAction(shiftId: string, registerId: string, formData: FormData) {
-  const user = await requireUser();
+  const authorization = await requireActionAccess("REGISTERS", "SHIFT_CLOSE");
   const parsed = parseClosingCash(formData);
-  if (!parsed.ok) registersRedirect("error", parsed.error, registerId);
+  if (!parsed.ok) {
+    await auditFailure(authorization, "SHIFT_CLOSE", parsed.error, { shiftId, registerId });
+    registersRedirect("error", parsed.error, registerId);
+  }
 
-  const updated = await prisma.registerShift.updateMany({
-    where: { id: shiftId, registerId, status: "OPEN" },
-    data: {
-      status: "CLOSED",
-      closedById: user.id,
-      closingCashLaari: parsed.data.closingCashLaari,
-      closedAt: new Date(),
-    },
-  });
-  if (updated.count !== 1) registersRedirect("error", "That shift is no longer open.", registerId);
+  try {
+    const request = await getAuditRequestContext();
+    await prisma.$transaction(async (tx) => {
+      const updated = await tx.registerShift.updateMany({
+        where: { id: shiftId, registerId, status: "OPEN" },
+        data: {
+          status: "CLOSED",
+          closedById: authorization.user.id,
+          closingCashLaari: parsed.data.closingCashLaari,
+          closedAt: new Date(),
+        },
+      });
+      if (updated.count !== 1) throw new PosError("That shift is no longer open.");
+      await writeAudit(tx, {
+        outcome: "SUCCESS",
+        event: "SHIFT_CLOSE",
+        page: "REGISTERS",
+        actorId: authorization.user.id,
+        actorLabel: actorLabel(authorization),
+        targetType: "register_shift",
+        targetId: shiftId,
+        summary: "Register shift closed.",
+        metadata: { registerId, closingCashLaari: parsed.data.closingCashLaari },
+        request,
+      });
+    });
+  } catch (error) {
+    const message = error instanceof PosError ? error.message : "The shift could not be closed.";
+    await auditFailure(authorization, "SHIFT_CLOSE", message, { shiftId, registerId });
+    registersRedirect("error", message, registerId);
+  }
 
   refreshRegisters();
   registersRedirect("success", "Shift closed.", registerId);
 }
 
 export async function recordSaleAction(shiftId: string, registerId: string, formData: FormData) {
-  const user = await requireUser();
+  const authorization = await requireActionAccess("REGISTERS", "SALE_RECORD");
   const parsed = parseSaleForm(formData);
-  if (!parsed.ok) registersRedirect("error", parsed.error, registerId);
+  if (!parsed.ok) {
+    await auditFailure(authorization, "SALE_RECORD", parsed.error, { shiftId, registerId });
+    registersRedirect("error", parsed.error, registerId);
+  }
 
   let receiptNumber: bigint;
   try {
     const sale = await recordSale(prisma, {
       shiftId,
-      createdById: user.id,
+      createdById: authorization.user.id,
       paymentMethod: parsed.data.paymentMethod,
       items: parsed.data.items,
+      audit: {
+        actorLabel: actorLabel(authorization),
+        request: await getAuditRequestContext(),
+      },
     });
     receiptNumber = sale.receiptNumber;
   } catch (error) {
-    registersRedirect(
-      "error",
-      error instanceof PosError ? error.message : "The sale could not be recorded.",
-      registerId,
-    );
+    const message = error instanceof PosError ? error.message : "The sale could not be recorded.";
+    await auditFailure(authorization, "SALE_RECORD", message, { shiftId, registerId });
+    registersRedirect("error", message, registerId);
   }
 
   refreshRegisters();
