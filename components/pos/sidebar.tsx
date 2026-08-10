@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
+  ChartNoAxesCombined,
   ChevronDown,
   LayoutDashboard,
   LogOut,
@@ -40,6 +41,7 @@ const navigation = [
   { href: "/", label: "Overview", icon: LayoutDashboard },
   { href: "/registers", label: "Registers", icon: Store },
   { href: "/inventory", label: "Inventory", icon: Package },
+  { href: "/reporting", label: "Reporting", icon: ChartNoAxesCombined },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 
