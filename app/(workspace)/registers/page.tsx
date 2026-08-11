@@ -50,9 +50,8 @@ export default async function RegistersPage({ searchParams }: PageProps<"/regist
   const shift = data.selectedShift;
   const success = single(params.success);
   const error = single(params.error);
-  const selectedSalesLaari = shift?.sales.reduce((sum, sale) => sum + sale.totalLaari, 0) ?? 0;
-  const selectedCashSalesLaari =
-    shift?.sales.filter((sale) => sale.paymentMethod === "CASH").reduce((sum, sale) => sum + sale.totalLaari, 0) ?? 0;
+  const selectedSalesLaari = shift?.salesLaari ?? 0;
+  const selectedCashSalesLaari = shift?.cashSalesLaari ?? 0;
   const selectedCashExpectedLaari = (shift?.openingCashLaari ?? 0) + selectedCashSalesLaari;
 
   return (
@@ -95,10 +94,11 @@ export default async function RegistersPage({ searchParams }: PageProps<"/regist
           </div>
           {data.registers.length ? data.registers.map((register) => {
             const openShift = register.shifts[0];
-            const amount = openShift?.sales.reduce((sum, sale) => sum + sale.totalLaari, 0) ?? 0;
+            const amount = openShift?.salesLaari ?? 0;
             const isSelected = register.id === selected?.id;
             return (
               <Link
+                prefetch={false}
                 key={register.id}
                 href={`/registers?register=${register.id}`}
                 className={cn("flex h-[82px] flex-col justify-between rounded-[9px] border border-border p-[13px]", isSelected && "border-primary bg-primary text-primary-foreground", !openShift && "opacity-70")}
@@ -122,7 +122,7 @@ export default async function RegistersPage({ searchParams }: PageProps<"/regist
                   <p className="text-xs text-muted-foreground">{shift ? `Shift owner: ${shift.openedBy.name}` : "Open a shift before recording sales."}</p>
                 </div>
                 <div className="flex flex-wrap items-end gap-2">
-                {selected.purpose === "RESTAURANT" ? <Link href={`/registers/${selected.id}/menu`} className="flex h-10 items-center rounded-lg border border-border bg-card px-4 text-xs font-semibold">Menu</Link> : null}
+                {selected.purpose === "RESTAURANT" ? <Link prefetch={false} href={`/registers/${selected.id}/menu`} className="flex h-10 items-center rounded-lg border border-border bg-card px-4 text-xs font-semibold">Menu</Link> : null}
                 {canEdit && shift ? (
                   <form action={closeShiftAction.bind(null, shift.id, selected.id)} className="flex items-end gap-2">
                     <label className="grid gap-1 text-[10px] text-muted-foreground">Closing cash (MVR)<input name="closingCash" inputMode="decimal" defaultValue={(selectedCashExpectedLaari / 100).toFixed(2)} className={`${fieldClass} w-32`} required /></label>
@@ -140,7 +140,7 @@ export default async function RegistersPage({ searchParams }: PageProps<"/regist
               {shift ? (
                 <>
                   <div className="grid min-h-[100px] border-y border-border sm:grid-cols-3">
-                    {[["NET SALES", formatMvr(selectedSalesLaari)], ["CASH EXPECTED", formatMvr(selectedCashExpectedLaari)], ["TRANSACTIONS", String(shift.sales.length)]].map(([label, value], index) => (
+                    {[["NET SALES", formatMvr(selectedSalesLaari)], ["CASH EXPECTED", formatMvr(selectedCashExpectedLaari)], ["TRANSACTIONS", String(shift.transactionCount)]].map(([label, value], index) => (
                       <div key={label} className={cn("flex flex-col justify-center gap-1.5 py-4 sm:px-[22px]", index === 0 && "sm:pl-0", index > 0 && "border-t border-border sm:border-l sm:border-t-0")}><span className="text-[10px] text-muted-foreground">{label}</span><span className="text-[23px] font-semibold leading-7">{value}</span></div>
                     ))}
                   </div>

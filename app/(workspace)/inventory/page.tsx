@@ -147,9 +147,9 @@ export default async function InventoryPage({ searchParams }: PageProps<"/invent
         <footer className="flex h-16 items-center justify-between border-t border-border text-[11px] text-muted-foreground">
           <span>Showing {data.products.length} of {data.total} products</span>
           <nav aria-label="Inventory pagination" className="flex items-center gap-2">
-            {data.page > 1 ? <Link href={inventoryHref(params, data.page - 1)} aria-label="Previous page" className="flex size-[30px] items-center justify-center rounded-[7px] border border-border"><ChevronLeft className="size-3" /></Link> : null}
+            {data.page > 1 ? <Link prefetch={false} href={inventoryHref(params, data.page - 1)} aria-label="Previous page" className="flex size-[30px] items-center justify-center rounded-[7px] border border-border"><ChevronLeft className="size-3" /></Link> : null}
             <span className="flex size-[30px] items-center justify-center rounded-[7px] bg-primary text-primary-foreground">{data.page}</span>
-            {data.page < data.pageCount ? <Link href={inventoryHref(params, data.page + 1)} aria-label="Next page" className="flex size-[30px] items-center justify-center rounded-[7px] border border-border"><ChevronRight className="size-3" /></Link> : null}
+            {data.page < data.pageCount ? <Link prefetch={false} href={inventoryHref(params, data.page + 1)} aria-label="Next page" className="flex size-[30px] items-center justify-center rounded-[7px] border border-border"><ChevronRight className="size-3" /></Link> : null}
           </nav>
         </footer>
       </Surface>

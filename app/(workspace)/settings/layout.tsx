@@ -15,12 +15,12 @@ export default async function SettingsLayout({ children }: { children: React.Rea
       >
         {canViewSettings ? (
           <>
-            <Link href="/settings" className="rounded-lg border border-border bg-card px-3 py-2 text-xs font-semibold hover:bg-accent">Accounts</Link>
-            <Link href="/settings/roles" className="rounded-lg border border-border bg-card px-3 py-2 text-xs font-semibold hover:bg-accent">Roles</Link>
+            <Link prefetch={false} href="/settings" className="rounded-lg border border-border bg-card px-3 py-2 text-xs font-semibold hover:bg-accent">Accounts</Link>
+            <Link prefetch={false} href="/settings/roles" className="rounded-lg border border-border bg-card px-3 py-2 text-xs font-semibold hover:bg-accent">Roles</Link>
           </>
         ) : null}
         {canViewAudit ? (
-          <Link href="/settings/audit-log" className="rounded-lg border border-border bg-card px-3 py-2 text-xs font-semibold hover:bg-accent">Audit log</Link>
+          <Link prefetch={false} href="/settings/audit-log" className="rounded-lg border border-border bg-card px-3 py-2 text-xs font-semibold hover:bg-accent">Audit log</Link>
         ) : null}
       </nav>
       {children}

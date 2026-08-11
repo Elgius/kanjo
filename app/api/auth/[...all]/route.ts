@@ -1,5 +1,15 @@
+import { after } from "next/server";
+
 import { auth } from "@/lib/auth";
-import { auditRequestContextFromHeaders, safeWriteAudit } from "@/lib/audit";
+import {
+  auditRequestContextFromHeaders,
+  safeWriteAudit,
+  type AuditInput,
+} from "@/lib/audit";
+
+function deferAudit(input: AuditInput) {
+  after(() => safeWriteAudit(input));
+}
 
 async function readIdentifier(request: Request) {
   try {
@@ -36,7 +46,7 @@ async function authHandler(request: Request) {
         responseUser = undefined;
       }
     }
-    await safeWriteAudit({
+    deferAudit({
       outcome: response.ok ? "SUCCESS" : "FAILURE",
       event: "AUTH_SIGN_IN",
       actorId: response.ok ? responseUser?.id : undefined,
@@ -46,7 +56,7 @@ async function authHandler(request: Request) {
       request: auditRequestContextFromHeaders(request.headers),
     });
   } else if (isSignOut) {
-    await safeWriteAudit({
+    deferAudit({
       outcome: response.ok ? "SUCCESS" : "FAILURE",
       event: "AUTH_SIGN_OUT",
       actorId: sessionBefore?.user.id,

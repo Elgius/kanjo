@@ -73,7 +73,7 @@ export async function getAuditLogPage(filters: AuditLogFilters) {
       direction === "newer"
         ? [{ occurredAt: "asc" }, { id: "asc" }]
         : [{ occurredAt: "desc" }, { id: "desc" }],
-    take: 50,
+    take: 51,
     select: {
       id: true,
       occurredAt: true,
@@ -89,33 +89,22 @@ export async function getAuditLogPage(filters: AuditLogFilters) {
       ipAddress: true,
     },
   });
-  const rows = direction === "newer" ? fetched.reverse() : fetched;
+  const hasMore = fetched.length > 50;
+  const page = fetched.slice(0, 50);
+  const rows = direction === "newer" ? page.reverse() : page;
   const first = rows[0];
   const last = rows.at(-1);
-
-  const [newer, older] = await Promise.all([
-    first
-      ? prisma.auditLog.findFirst({
-          where: { AND: [baseWhere, keyCondition(first.occurredAt, first.id, "newer")] },
-          select: { id: true },
-        })
-      : null,
-    last
-      ? prisma.auditLog.findFirst({
-          where: { AND: [baseWhere, keyCondition(last.occurredAt, last.id, "older")] },
-          select: { id: true },
-        })
-      : null,
-  ]);
+  const hasNewerPage = direction === "newer" ? hasMore : Boolean(after);
+  const hasOlderPage = direction === "older" ? hasMore : Boolean(before);
 
   return {
     rows,
     previousCursor:
-      newer && first
+      hasNewerPage && first
         ? encodeAuditCursor({ occurredAt: first.occurredAt.toISOString(), id: first.id })
         : null,
     nextCursor:
-      older && last
+      hasOlderPage && last
         ? encodeAuditCursor({ occurredAt: last.occurredAt.toISOString(), id: last.id })
         : null,
   };

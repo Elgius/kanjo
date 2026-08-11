@@ -42,7 +42,7 @@ export default async function RestaurantMenuPage({ params, searchParams }: PageP
   const query = await searchParams;
   const success = single(query.success); const error = single(query.error);
   return <PageContainer>
-    <PageHeader eyebrow="Restaurant register" title={`${register.name} menu`} description="Build menu items from inventory servings. Sales consume the earliest-expiring ingredient batches first." actions={<Link href={`/registers?register=${register.id}`} className="flex h-10 items-center rounded-lg border border-border bg-card px-4 text-xs font-semibold">Back to register</Link>} />
+    <PageHeader eyebrow="Restaurant register" title={`${register.name} menu`} description="Build menu items from inventory servings. Sales consume the earliest-expiring ingredient batches first." actions={<Link prefetch={false} href={`/registers?register=${register.id}`} className="flex h-10 items-center rounded-lg border border-border bg-card px-4 text-xs font-semibold">Back to register</Link>} />
     {success || error ? <p role={error ? "alert" : "status"} className={cn("rounded-lg border px-4 py-3 text-xs", error ? "border-destructive/30 bg-destructive/10 text-destructive" : "border-chart-1/30 bg-chart-1/10")}>{error ?? success}</p> : null}
     {canEdit ? <details className="rounded-xl border border-border bg-card p-4"><summary className="cursor-pointer text-sm font-semibold">Add menu item</summary><div className="mt-4"><MenuItemForm registerId={register.id} products={productOptions} /></div></details> : null}
     <div className="grid gap-4">

@@ -58,7 +58,7 @@ type SidebarRegister = {
 
 function Brand({ compact = false, homeHref = "/" }: { compact?: boolean; homeHref?: string }) {
   return (
-    <Link href={homeHref} className="flex min-w-0 items-center gap-[11px] px-2">
+    <Link prefetch={false} href={homeHref} className="flex min-w-0 items-center gap-[11px] px-2">
       <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary font-serif text-lg font-bold text-primary-foreground">
         K
       </span>
@@ -97,7 +97,7 @@ function Navigation({ allowedPages }: { allowedPages: PageKey[] }) {
           return (
             <SidebarMenuItem key={href}>
               <SidebarMenuButton
-                render={<Link href={href} />}
+                render={<Link href={href} prefetch={false} />}
                 isActive={active}
                 tooltip={label}
                 className="h-10 gap-3 rounded-lg px-3 text-[13px] font-medium data-active:bg-sidebar-primary data-active:text-sidebar-primary-foreground group-data-[collapsible=icon]:size-10!"

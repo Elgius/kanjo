@@ -107,7 +107,7 @@ export default async function StockPage({ searchParams }: PageProps<"/stock">) {
         </select>
         <button type="submit" className="h-11 rounded-lg bg-primary px-4 text-xs font-semibold text-primary-foreground">Apply filters</button>
         {(filters.query || (filters.register && filters.register !== "all") || filters.movement !== "all") ? (
-          <Link href="/stock" className="flex h-11 items-center justify-center rounded-lg border border-border bg-card px-4 text-xs font-semibold hover:bg-accent">Clear</Link>
+          <Link prefetch={false} href="/stock" className="flex h-11 items-center justify-center rounded-lg border border-border bg-card px-4 text-xs font-semibold hover:bg-accent">Clear</Link>
         ) : null}
       </form>
 

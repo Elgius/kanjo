@@ -1,5 +1,6 @@
 import "server-only";
 
+import { cache } from "react";
 import type { InventoryMovementType, Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/db";
 import { formatHour, getBusinessDayRange, getMaldivesHour, shiftRange } from "@/lib/pos/dates";
@@ -16,11 +17,33 @@ export type InventoryFilters = {
 };
 
 export async function getInventoryData(filters: InventoryFilters = {}) {
-  const [rawProducts, registers] = await Promise.all([
+  const [rawProducts, batchBalances, registers] = await Promise.all([
     prisma.product.findMany({
       where: { active: true },
       orderBy: { updatedAt: "desc" },
-      include: { register: { select: { id: true, code: true, name: true, purpose: true } }, batches: { where: { remainingQuantity: { gt: 0 } }, orderBy: { receivedAt: "asc" } } },
+      select: {
+        id: true,
+        registerId: true,
+        sku: true,
+        barcode: true,
+        name: true,
+        category: true,
+        description: true,
+        retailPriceLaari: true,
+        costPriceLaari: true,
+        lowStockThreshold: true,
+        kind: true,
+        quantityMetric: true,
+        quantityValue: true,
+        servingSize: true,
+        updatedAt: true,
+        register: { select: { id: true, code: true, name: true, purpose: true } },
+      },
+    }),
+    prisma.inventoryBatch.groupBy({
+      by: ["productId"],
+      where: { remainingQuantity: { gt: 0 }, product: { active: true } },
+      _sum: { remainingQuantity: true },
     }),
     prisma.cashRegister.findMany({
       where: { active: true },
@@ -28,8 +51,11 @@ export async function getInventoryData(filters: InventoryFilters = {}) {
       select: { id: true, code: true, name: true, purpose: true },
     }),
   ]);
+  const balanceByProduct = new Map(
+    batchBalances.map((balance) => [balance.productId, quantityNumber(balance._sum.remainingQuantity)]),
+  );
   const allProducts = rawProducts.map((product) => {
-    const measuredOnHand = product.batches.reduce((sum, batch) => sum + quantityNumber(batch.remainingQuantity), 0);
+    const measuredOnHand = balanceByProduct.get(product.id) ?? 0;
     return { ...product, measuredOnHand, stockQuantity: stockUnitsFromMeasured(product, measuredOnHand) };
   });
 
@@ -64,9 +90,31 @@ export async function getInventoryData(filters: InventoryFilters = {}) {
   const pageSize = 20;
   const pageCount = Math.max(1, Math.ceil(matching.length / pageSize));
   const page = Math.min(Math.max(filters.page ?? 1, 1), pageCount);
+  const pageProducts = matching.slice((page - 1) * pageSize, page * pageSize);
+  const batches = pageProducts.length
+    ? await prisma.inventoryBatch.findMany({
+        where: { productId: { in: pageProducts.map((product) => product.id) }, remainingQuantity: { gt: 0 } },
+        orderBy: { receivedAt: "asc" },
+        select: {
+          id: true,
+          productId: true,
+          remainingQuantity: true,
+          expiryDate: true,
+        },
+      })
+    : [];
+  const batchesByProduct = new Map<string, typeof batches>();
+  for (const batch of batches) {
+    const productBatches = batchesByProduct.get(batch.productId) ?? [];
+    productBatches.push(batch);
+    batchesByProduct.set(batch.productId, productBatches);
+  }
 
   return {
-    products: matching.slice((page - 1) * pageSize, page * pageSize),
+    products: pageProducts.map((product) => ({
+      ...product,
+      batches: batchesByProduct.get(product.id) ?? [],
+    })),
     registers,
     categories,
     page,
@@ -116,13 +164,38 @@ export async function getStockData(filters: StockFilters = {}) {
     prisma.product.findMany({
       where: productWhere,
       orderBy: [{ register: { name: "asc" } }, { name: "asc" }],
-      include: { register: { select: { id: true, code: true, name: true, purpose: true } }, batches: { where: { remainingQuantity: { gt: 0 } }, orderBy: [{ expiryDate: "asc" }, { receivedAt: "asc" }] } },
+      select: {
+        id: true,
+        sku: true,
+        barcode: true,
+        name: true,
+        category: true,
+        description: true,
+        costPriceLaari: true,
+        lowStockThreshold: true,
+        kind: true,
+        quantityMetric: true,
+        quantityValue: true,
+        servingSize: true,
+        register: { select: { id: true, code: true, name: true, purpose: true } },
+        batches: {
+          where: { remainingQuantity: { gt: 0 } },
+          orderBy: [{ expiryDate: "asc" }, { receivedAt: "asc" }],
+          select: { id: true, remainingQuantity: true, expiryDate: true },
+        },
+      },
     }),
     prisma.inventoryMovement.findMany({
       where: movementWhere,
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       ...(!query ? { take: 100 } : {}),
-      include: {
+      select: {
+        id: true,
+        type: true,
+        quantityDelta: true,
+        balanceAfter: true,
+        reason: true,
+        createdAt: true,
         product: {
           select: {
             id: true,
@@ -207,27 +280,196 @@ export async function getStockData(filters: StockFilters = {}) {
   };
 }
 
-const registerWithOpenShift = {
-  shifts: {
-    where: { status: "OPEN" as const },
-    orderBy: { openedAt: "desc" as const },
-    take: 1,
-    include: {
-      openedBy: { select: { name: true } },
-      sales: {
-        where: { status: "COMPLETED" as const },
-        select: { totalLaari: true, paymentMethod: true },
-      },
-    },
-  },
-};
-
-export async function getRegistersData(selectedRegisterId?: string) {
+export const getRegisterSummaries = cache(async () => {
   const registers = await prisma.cashRegister.findMany({
     where: { active: true },
     orderBy: { name: "asc" },
-    include: registerWithOpenShift,
+    select: {
+      id: true,
+      code: true,
+      name: true,
+      purpose: true,
+      shifts: {
+        where: { status: "OPEN" },
+        orderBy: { openedAt: "desc" },
+        take: 1,
+        select: {
+          id: true,
+          openingCashLaari: true,
+          openedAt: true,
+          openedBy: { select: { name: true } },
+        },
+      },
+    },
   });
+  const shiftIds = registers.flatMap((register) => register.shifts.map((shift) => shift.id));
+  const salesByPayment = shiftIds.length
+    ? await prisma.sale.groupBy({
+        by: ["registerShiftId", "paymentMethod"],
+        where: { registerShiftId: { in: shiftIds }, status: "COMPLETED" },
+        _sum: { totalLaari: true },
+        _count: { id: true },
+      })
+    : [];
+  const totalsByShift = new Map<
+    string,
+    { salesLaari: number; cashSalesLaari: number; transactionCount: number }
+  >();
+  for (const aggregate of salesByPayment) {
+    if (!aggregate.registerShiftId) continue;
+    const totals = totalsByShift.get(aggregate.registerShiftId) ?? {
+      salesLaari: 0,
+      cashSalesLaari: 0,
+      transactionCount: 0,
+    };
+    const salesLaari = aggregate._sum.totalLaari ?? 0;
+    totals.salesLaari += salesLaari;
+    totals.transactionCount += aggregate._count.id;
+    if (aggregate.paymentMethod === "CASH") totals.cashSalesLaari += salesLaari;
+    totalsByShift.set(aggregate.registerShiftId, totals);
+  }
+
+  return registers.map((register) => ({
+    ...register,
+    shifts: register.shifts.map((shift) => ({
+      ...shift,
+      ...(totalsByShift.get(shift.id) ?? {
+        salesLaari: 0,
+        cashSalesLaari: 0,
+        transactionCount: 0,
+      }),
+    })),
+  }));
+});
+
+type SellableItem = {
+  id: string;
+  name: string;
+  sku: string | null;
+  stockQuantity: number;
+  retailPriceLaari: number;
+  soldOutReason: string | null;
+};
+
+async function getSellableItems(register: { id: string; purpose: string }): Promise<SellableItem[]> {
+  if (register.purpose === "SHOP") {
+    const rows = await prisma.product.findMany({
+      where: { active: true, registerId: register.id },
+      orderBy: { name: "asc" },
+      select: {
+        id: true,
+        name: true,
+        sku: true,
+        retailPriceLaari: true,
+        kind: true,
+        quantityMetric: true,
+        quantityValue: true,
+        servingSize: true,
+        batches: {
+          where: { remainingQuantity: { gt: 0 } },
+          select: { remainingQuantity: true, expiryDate: true },
+        },
+      },
+    });
+    const today = maldivesDate();
+    return rows
+      .map((product) => {
+        const usable = product.batches
+          .filter((batch) => !batch.expiryDate || batch.expiryDate >= today)
+          .reduce((sum, batch) => sum + quantityNumber(batch.remainingQuantity), 0);
+        const available = Math.floor(stockUnitsFromMeasured(product, usable) + 0.000001);
+        return {
+          id: product.id,
+          name: product.name,
+          sku: product.sku,
+          stockQuantity: available,
+          retailPriceLaari: product.retailPriceLaari,
+          soldOutReason: available ? null : "Out of usable stock",
+        };
+      })
+      .filter((product) => product.stockQuantity > 0);
+  }
+
+  if (register.purpose === "RESTAURANT") {
+    const today = maldivesDate();
+    const rows = await prisma.menuItem.findMany({
+      where: { registerId: register.id, active: true },
+      orderBy: { name: "asc" },
+      select: {
+        id: true,
+        name: true,
+        retailPriceLaari: true,
+        ingredients: {
+          select: {
+            servingMultiplier: true,
+            product: {
+              select: {
+                name: true,
+                kind: true,
+                quantityMetric: true,
+                quantityValue: true,
+                servingSize: true,
+                batches: {
+                  where: { remainingQuantity: { gt: 0 } },
+                  select: { remainingQuantity: true, expiryDate: true },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    return rows.map((item) => {
+      if (!item.ingredients.length) {
+        return {
+          id: item.id,
+          name: item.name,
+          sku: null,
+          stockQuantity: 0,
+          retailPriceLaari: item.retailPriceLaari,
+          soldOutReason: "Recipe is incomplete",
+        };
+      }
+      let limiting: { count: number; reason: string | null } = {
+        count: Number.MAX_SAFE_INTEGER,
+        reason: null,
+      };
+      for (const ingredient of item.ingredients) {
+        const usable = ingredient.product.batches
+          .filter((batch) => batch.expiryDate && batch.expiryDate >= today)
+          .reduce((sum, batch) => sum + quantityNumber(batch.remainingQuantity), 0);
+        const perItem = measuredPerServing(ingredient.product) * ingredient.servingMultiplier;
+        const count = perItem > 0 ? Math.floor(usable / perItem + 0.000001) : 0;
+        const hasUndated = ingredient.product.batches.some((batch) => !batch.expiryDate);
+        const hasExpired = ingredient.product.batches.some(
+          (batch) => batch.expiryDate && batch.expiryDate < today,
+        );
+        if (count < limiting.count) {
+          limiting = {
+            count,
+            reason:
+              count > 0
+                ? null
+                : `${ingredient.product.name}: ${hasUndated ? "expiry missing" : hasExpired ? "stock expired" : "insufficient stock"}`,
+          };
+        }
+      }
+      return {
+        id: item.id,
+        name: item.name,
+        sku: null,
+        stockQuantity: limiting.count,
+        retailPriceLaari: item.retailPriceLaari,
+        soldOutReason: limiting.count ? null : limiting.reason,
+      };
+    });
+  }
+
+  return [];
+}
+
+export async function getRegistersData(selectedRegisterId?: string) {
+  const registers = await getRegisterSummaries();
   const selected =
     registers.find((register) => register.id === selectedRegisterId) ??
     registers.find((register) => register.shifts.length > 0) ??
@@ -235,7 +477,7 @@ export async function getRegistersData(selectedRegisterId?: string) {
     null;
   const selectedShiftId = selected?.shifts[0]?.id;
 
-  const recentSales = await (
+  const [recentSales, products] = await Promise.all([
     selectedShiftId
       ? prisma.sale.findMany({
           where: { registerShiftId: selectedShiftId, status: "COMPLETED" },
@@ -243,47 +485,17 @@ export async function getRegistersData(selectedRegisterId?: string) {
           take: 10,
           include: { _count: { select: { items: true } } },
         })
-      : Promise.resolve([])
-  );
-  let products: Array<{ id: string; name: string; sku: string | null; stockQuantity: number; retailPriceLaari: number; soldOutReason: string | null }> = [];
-  if (selected?.purpose === "SHOP") {
-    const rows = await prisma.product.findMany({ where: { active: true, registerId: selected.id }, orderBy: { name: "asc" }, include: { batches: { where: { remainingQuantity: { gt: 0 } } } } });
-    const today = maldivesDate();
-    products = rows.map((product) => {
-      const usable = product.batches.filter((batch) => !batch.expiryDate || batch.expiryDate >= today).reduce((sum, batch) => sum + quantityNumber(batch.remainingQuantity), 0);
-      const available = Math.floor(stockUnitsFromMeasured(product, usable) + 0.000001);
-      return { id: product.id, name: product.name, sku: product.sku, stockQuantity: available, retailPriceLaari: product.retailPriceLaari, soldOutReason: available ? null : "Out of usable stock" };
-    }).filter((product) => product.stockQuantity > 0);
-  } else if (selected?.purpose === "RESTAURANT") {
-    const today = maldivesDate();
-    const rows = await prisma.menuItem.findMany({ where: { registerId: selected.id, active: true }, orderBy: { name: "asc" }, include: { ingredients: { include: { product: { include: { batches: { where: { remainingQuantity: { gt: 0 } } } } } } } } });
-    products = rows.map((item) => {
-      if (!item.ingredients.length) return { id: item.id, name: item.name, sku: null, stockQuantity: 0, retailPriceLaari: item.retailPriceLaari, soldOutReason: "Recipe is incomplete" };
-      let limiting: { count: number; reason: string | null } = { count: Number.MAX_SAFE_INTEGER, reason: null };
-      for (const ingredient of item.ingredients) {
-        const usable = ingredient.product.batches.filter((batch) => batch.expiryDate && batch.expiryDate >= today).reduce((sum, batch) => sum + quantityNumber(batch.remainingQuantity), 0);
-        const perItem = measuredPerServing(ingredient.product) * ingredient.servingMultiplier;
-        const count = perItem > 0 ? Math.floor(usable / perItem + 0.000001) : 0;
-        const hasUndated = ingredient.product.batches.some((batch) => !batch.expiryDate);
-        const hasExpired = ingredient.product.batches.some((batch) => batch.expiryDate && batch.expiryDate < today);
-        if (count < limiting.count) limiting = { count, reason: count > 0 ? null : `${ingredient.product.name}: ${hasUndated ? "expiry missing" : hasExpired ? "stock expired" : "insufficient stock"}` };
-      }
-      return { id: item.id, name: item.name, sku: null, stockQuantity: limiting.count, retailPriceLaari: item.retailPriceLaari, soldOutReason: limiting.count ? null : limiting.reason };
-    });
-  }
+      : Promise.resolve([]),
+    selected ? getSellableItems(selected) : Promise.resolve([]),
+  ]);
 
   const openShifts = registers.flatMap((register) => register.shifts);
   const activeShiftSalesLaari = openShifts.reduce(
-    (sum, shift) => sum + shift.sales.reduce((shiftSum, sale) => shiftSum + sale.totalLaari, 0),
+    (sum, shift) => sum + shift.salesLaari,
     0,
   );
   const cashOnHandLaari = openShifts.reduce(
-    (sum, shift) =>
-      sum +
-      shift.openingCashLaari +
-      shift.sales
-        .filter((sale) => sale.paymentMethod === "CASH")
-        .reduce((cash, sale) => cash + sale.totalLaari, 0),
+    (sum, shift) => sum + shift.openingCashLaari + shift.cashSalesLaari,
     0,
   );
 
@@ -303,11 +515,7 @@ export async function getRegistersData(selectedRegisterId?: string) {
 }
 
 export async function getSidebarRegisters() {
-  const registers = await prisma.cashRegister.findMany({
-    where: { active: true },
-    orderBy: { name: "asc" },
-    include: registerWithOpenShift,
-  });
+  const registers = await getRegisterSummaries();
   return registers.map((register) => {
     const shift = register.shifts[0];
     return {
@@ -315,7 +523,7 @@ export async function getSidebarRegisters() {
       code: register.code,
       name: register.name,
       isOpen: Boolean(shift),
-      salesLaari: shift?.sales.reduce((sum, sale) => sum + sale.totalLaari, 0) ?? 0,
+      salesLaari: shift?.salesLaari ?? 0,
     };
   });
 }
@@ -331,7 +539,6 @@ export async function getOverviewData() {
       select: {
         totalLaari: true,
         createdAt: true,
-        registerShiftId: true,
         items: {
           select: {
             productId: true,
@@ -344,27 +551,25 @@ export async function getOverviewData() {
         },
       },
     }),
-    prisma.sale.findMany({
+    prisma.sale.aggregate({
       where: { status: "COMPLETED", createdAt: { gte: yesterday.start, lt: yesterday.end } },
-      select: { totalLaari: true },
+      _sum: { totalLaari: true },
+      _count: { _all: true },
     }),
     prisma.sale.findMany({
       where: { status: "COMPLETED", createdAt: { gte: lastWeek.start, lt: lastWeek.end } },
       select: { totalLaari: true, createdAt: true },
     }),
-    prisma.sale.findMany({
+    prisma.sale.aggregate({
       where: { status: "REFUNDED", refundedAt: { gte: today.start, lt: today.end } },
-      select: { totalLaari: true },
+      _sum: { totalLaari: true },
+      _count: { _all: true },
     }),
-    prisma.cashRegister.findMany({
-      where: { active: true },
-      orderBy: { name: "asc" },
-      include: registerWithOpenShift,
-    }),
+    getRegisterSummaries(),
   ]);
 
   const netSalesLaari = todaySales.reduce((sum, sale) => sum + sale.totalLaari, 0);
-  const yesterdaySalesLaari = yesterdaySales.reduce((sum, sale) => sum + sale.totalLaari, 0);
+  const yesterdaySalesLaari = yesterdaySales._sum.totalLaari ?? 0;
   const productTotals = new Map<string, { name: string; units: number; salesLaari: number }>();
   const categoryTotals = new Map<string, number>();
 
@@ -398,10 +603,10 @@ export async function getOverviewData() {
       netSalesLaari,
       previousSalesLaari: yesterdaySalesLaari,
       orders: todaySales.length,
-      previousOrders: yesterdaySales.length,
+      previousOrders: yesterdaySales._count._all,
       averageOrderLaari: todaySales.length ? Math.round(netSalesLaari / todaySales.length) : 0,
-      refunds: todayRefunds.length,
-      refundsLaari: todayRefunds.reduce((sum, sale) => sum + sale.totalLaari, 0),
+      refunds: todayRefunds._count._all,
+      refundsLaari: todayRefunds._sum.totalLaari ?? 0,
     },
     hourly,
     topProducts: [...productTotals.values()]
@@ -419,7 +624,7 @@ export async function getOverviewData() {
       .map((register) => ({
         id: register.id,
         name: register.name,
-        salesLaari: register.shifts[0].sales.reduce((sum, sale) => sum + sale.totalLaari, 0),
+        salesLaari: register.shifts[0].salesLaari,
       }))
       .sort((left, right) => right.salesLaari - left.salesLaari),
   };
