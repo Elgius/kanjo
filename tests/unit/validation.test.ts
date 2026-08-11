@@ -79,11 +79,10 @@ describe("POS form validation", () => {
 
   test("requires a supported register purpose", () => {
     const form = new FormData();
-    form.set("code", "REST-01");
     form.set("name", "Restaurant");
     expect(parseRegisterForm(form).ok).toBe(false);
     form.set("purpose", "RESTAURANT");
-    expect(JSON.stringify(parseRegisterForm(form))).toBe(JSON.stringify({ ok: true, data: { code: "REST-01", name: "Restaurant", purpose: "RESTAURANT" } }));
+    expect(JSON.stringify(parseRegisterForm(form))).toBe(JSON.stringify({ ok: true, data: { name: "Restaurant", purpose: "RESTAURANT" } }));
   });
 
   test("validates menu recipes and whole serving multiples", () => {

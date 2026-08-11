@@ -15,10 +15,10 @@ import { cn } from "@/lib/utils";
 import { canAccess, requirePageAccess } from "@/lib/authorization";
 import {
   closeShiftAction,
-  createRegisterAction,
   openShiftAction,
   recordSaleAction,
 } from "./actions";
+import { NewRegisterMenu } from "./new-register-menu";
 
 const fieldClass =
   "h-10 rounded-lg border border-border bg-card px-3 text-xs outline-none focus:border-ring focus:ring-2 focus:ring-ring/15";
@@ -60,18 +60,7 @@ export default async function RegistersPage({ searchParams }: PageProps<"/regist
         eyebrow="Registry"
         title="Cash registers"
         description="Open shifts, record sales, and reconcile each cash drawer."
-        actions={canEdit ? (
-          <details className="group relative">
-            <summary className="flex h-10 cursor-pointer list-none items-center rounded-lg bg-primary px-4 text-xs font-semibold text-primary-foreground">Add register</summary>
-            <form action={createRegisterAction} className="absolute right-0 z-20 mt-2 grid w-[min(90vw,380px)] gap-3 rounded-xl border border-border bg-card p-5 shadow-xl">
-              <h2 className="text-sm font-semibold">New register</h2>
-              <label className="grid gap-1.5 text-xs">Code<input name="code" placeholder="REG-01" className={fieldClass} required /></label>
-              <label className="grid gap-1.5 text-xs">Name<input name="name" placeholder="Counter 01" className={fieldClass} required /></label>
-              <fieldset className="grid gap-2 text-xs"><legend>Purpose</legend><div className="grid grid-cols-2 gap-2"><label className="flex cursor-pointer items-center gap-2 rounded-lg border border-border p-3"><input type="radio" name="purpose" value="SHOP" required /> Shop</label><label className="flex cursor-pointer items-center gap-2 rounded-lg border border-border p-3"><input type="radio" name="purpose" value="RESTAURANT" required /> Restaurant</label></div></fieldset>
-              <button type="submit" className="h-10 rounded-lg bg-primary text-xs font-semibold text-primary-foreground">Save register</button>
-            </form>
-          </details>
-        ) : null}
+        actions={canEdit ? <NewRegisterMenu /> : null}
       />
 
       {success || error ? (

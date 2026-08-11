@@ -119,16 +119,15 @@ export function parseStockAdjustment(formData: FormData) {
 }
 
 export function parseRegisterForm(formData: FormData) {
-  const code = text(formData, "code").toUpperCase();
   const name = text(formData, "name");
   const purpose = text(formData, "purpose");
-  if (!code || !name) {
-    return { ok: false, error: "Register code and name are required." } as const;
+  if (!name) {
+    return { ok: false, error: "Register name is required." } as const;
   }
   if (purpose !== "SHOP" && purpose !== "RESTAURANT") {
     return { ok: false, error: "Select whether this register is for a shop or restaurant." } as const;
   }
-  return { ok: true, data: { code, name, purpose } } as const;
+  return { ok: true, data: { name, purpose } } as const;
 }
 
 export function parseOpeningCash(formData: FormData) {

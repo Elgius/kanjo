@@ -8,6 +8,7 @@ import { prisma } from "@/lib/db";
 import { getAuditRequestContext, safeWriteAudit, writeAudit } from "@/lib/audit";
 import { requireActionAccess, type AuthorizationContext } from "@/lib/authorization";
 import { PosError, recordSale } from "@/lib/pos/sales";
+import { createRegisterWithGeneratedCode } from "@/lib/pos/registers";
 import {
   parseClosingCash,
   parseOpeningCash,
@@ -63,7 +64,7 @@ export async function createRegisterAction(formData: FormData) {
   try {
     const request = await getAuditRequestContext();
     register = await prisma.$transaction(async (tx) => {
-      const created = await tx.cashRegister.create({ data: parsed.data });
+      const created = await createRegisterWithGeneratedCode(tx, parsed.data);
       await writeAudit(tx, {
         outcome: "SUCCESS",
         event: "REGISTER_CREATE",
@@ -80,7 +81,7 @@ export async function createRegisterAction(formData: FormData) {
     });
   } catch (error) {
     const message = error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002"
-      ? "That register code or name already exists."
+      ? "That register name already exists."
       : "The register could not be created.";
     await auditFailure(authorization, "REGISTER_CREATE", message, parsed.data);
     registersRedirect("error", message);
