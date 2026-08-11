@@ -1,11 +1,8 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, test } from "bun:test";
 import { hashPassword } from "better-auth/crypto";
 
 import type { PrismaClient } from "@/generated/prisma/client";
-
-const testDatabaseUrl = process.env.TEST_NEON_DB ?? process.env.NEON_DB;
-const runDatabaseTests = process.env.RUN_DB_TESTS === "1" && Boolean(testDatabaseUrl);
-const databaseDescribe = runDatabaseTests ? describe : describe.skip;
+import { databaseDescribe, testDatabaseUrl } from "@/tests/integration/database";
 
 function responseCookies(response: Response) {
   const headers = response.headers as Headers & { getSetCookie?: () => string[] };
@@ -96,8 +93,12 @@ databaseDescribe("Better Auth cookie cache", () => {
       const separator = cookie.indexOf(";");
       const pair = separator === -1 ? cookie : cookie.slice(0, separator);
       const attributes = separator === -1 ? "" : cookie.slice(separator);
-      const last = pair.at(-1);
-      return `${pair.slice(0, -1)}${last === "a" ? "b" : "a"}${attributes}`;
+      const equals = pair.indexOf("=");
+      const value = pair.slice(equals + 1);
+      const tamperAt = Math.max(0, Math.floor(value.length / 2));
+      const character = value[tamperAt];
+      const tamperedValue = `${value.slice(0, tamperAt)}${character === "a" ? "b" : "a"}${value.slice(tamperAt + 1)}`;
+      return `${pair.slice(0, equals + 1)}${tamperedValue}${attributes}`;
     });
     const tamperedResponse = await auth.handler(
       new Request("http://localhost:3000/api/auth/get-session", {
@@ -145,7 +146,16 @@ databaseDescribe("register summaries", () => {
     openRegisterId = (await db.cashRegister.create({ data: { code: `${marker}-OPEN`, name: `${marker}-open` } })).id;
     closedRegisterId = (await db.cashRegister.create({ data: { code: `${marker}-CLOSED`, name: `${marker}-closed` } })).id;
     openShiftId = (await db.registerShift.create({ data: { registerId: openRegisterId, openedById: userId, openingCashLaari: 500 } })).id;
-    closedShiftId = (await db.registerShift.create({ data: { registerId: closedRegisterId, openedById: userId, status: "CLOSED", closedAt: new Date() } })).id;
+    closedShiftId = (await db.registerShift.create({
+      data: {
+        registerId: closedRegisterId,
+        openedById: userId,
+        status: "CLOSED",
+        closedById: userId,
+        closingCashLaari: 0,
+        closedAt: new Date(),
+      },
+    })).id;
     await db.sale.createMany({ data: [
       { registerShiftId: openShiftId, createdById: userId, status: "COMPLETED", paymentMethod: "CASH", subtotalLaari: 100, totalLaari: 100 },
       { registerShiftId: openShiftId, createdById: userId, status: "COMPLETED", paymentMethod: "CARD", subtotalLaari: 250, totalLaari: 250 },
@@ -157,8 +167,8 @@ databaseDescribe("register summaries", () => {
   afterAll(async () => {
     if (!db) return;
     await db.sale.deleteMany({ where: { createdById: userId } });
-    await db.registerShift.deleteMany({ where: { id: { in: [openShiftId, closedShiftId] } } });
-    await db.cashRegister.deleteMany({ where: { id: { in: [openRegisterId, closedRegisterId] } } });
+    await db.registerShift.deleteMany({ where: { id: { in: [openShiftId, closedShiftId].filter(Boolean) } } });
+    await db.cashRegister.deleteMany({ where: { id: { in: [openRegisterId, closedRegisterId].filter(Boolean) } } });
     await db.user.deleteMany({ where: { id: userId } });
     await db.role.deleteMany({ where: { id: roleId } });
   });

@@ -62,7 +62,7 @@ Public registration is disabled. After the authorization migration is deployed, 
 
 New accounts sign in with their username. Existing accounts can continue signing in with their email address. Audit records are retained in the live database; no automatic purge or archive process is included yet.
 
-Test schema migrations and database integration tests against an isolated Neon branch by setting `TEST_NEON_DB` before running `bun run test:integration`.
+Test schema migrations and database integration tests against an isolated Neon branch by setting `TEST_NEON_DB` before running `bun run test:integration`. The suite refuses to run against `NEON_DB` directly.
 
 ## Tests
 
@@ -72,7 +72,7 @@ Run the pure unit suite without a database:
 bun run test:unit
 ```
 
-For the integration suite, set `TEST_NEON_DB` to an isolated Neon branch when possible. The suite creates uniquely named records, verifies atomic sales and rollback behavior, and removes its records afterward:
+For the integration suite, `TEST_NEON_DB` must point to an isolated Neon branch. The suite creates uniquely named records, verifies atomic sales and rollback behavior, and removes its records afterward:
 
 ```bash
 bun run test:integration

@@ -1,7 +1,7 @@
 import "server-only";
 
 import { cache } from "react";
-import type { InventoryMovementType, Prisma } from "@/generated/prisma/client";
+import { Prisma, type InventoryMovementType } from "@/generated/prisma/client";
 import { prisma } from "@/lib/db";
 import { formatHour, getBusinessDayRange, getMaldivesHour, shiftRange } from "@/lib/pos/dates";
 import { maldivesDate, measuredPerServing, quantityNumber, stockUnitsFromMeasured } from "@/lib/pos/inventory";
@@ -140,7 +140,7 @@ export type StockFilters = {
   movement?: "all" | InventoryMovementType;
 };
 
-export async function getStockData(filters: StockFilters = {}) {
+async function getStockDataExhaustive(filters: StockFilters = {}) {
   const registerId = filters.register && filters.register !== "all" ? filters.register : undefined;
   const query = filters.query?.trim();
   const movementType = filters.movement && filters.movement !== "all"
@@ -277,6 +277,214 @@ export async function getStockData(filters: StockFilters = {}) {
       ).length,
       outOfStock: products.filter((product) => product.stockQuantity === 0).length,
     },
+  };
+}
+
+const STOCK_CANDIDATE_LIMIT = 1_001;
+const STOCK_RESULT_LIMIT = 100;
+
+type StockDatabaseProduct = {
+  id: string;
+  sku: string;
+  barcode: string | null;
+  name: string;
+  category: string;
+  description: string | null;
+  costPriceLaari: number;
+  lowStockThreshold: number;
+  kind: "GOODS" | "CONSUMABLE";
+  quantityMetric: string | null;
+  quantityValue: string | number | null;
+  servingSize: string | number | null;
+  register: { id: string; code: string; name: string; purpose: "SHOP" | "RESTAURANT" };
+  batches: Array<{
+    id: string;
+    remainingQuantity: string | number;
+    expiryDate: string | null;
+  }>;
+  measuredOnHand: string | number;
+  stockQuantity: string | number;
+};
+
+type StockDatabaseMovement = {
+  id: string;
+  type: InventoryMovementType;
+  quantityDelta: string | number;
+  balanceAfter: string | number;
+  reason: string | null;
+  createdAt: string;
+  product: {
+    id: string;
+    name: string;
+    sku: string;
+    kind: "GOODS" | "CONSUMABLE";
+    quantityMetric: string | null;
+    quantityValue: string | number | null;
+    servingSize: string | number | null;
+  };
+  register: { id: string; code: string; name: string };
+  createdBy: { name: string };
+  sale: { receiptNumber: string } | null;
+};
+
+type StockDatabasePayload = {
+  registers: Array<{ id: string; code: string; name: string }>;
+  products: StockDatabaseProduct[];
+  movements: StockDatabaseMovement[];
+  movementCount: number;
+  productCandidateCapHit: boolean;
+  movementCandidateCapHit: boolean;
+  metrics: {
+    unitsOnHand: string | number;
+    stockValueLaari: string | number;
+    lowStock: number;
+    outOfStock: number;
+  };
+};
+
+function stockDecimal(value: string | number | null) {
+  return value === null ? null : new Prisma.Decimal(String(value));
+}
+
+function hydrateStockPayload(payload: StockDatabasePayload) {
+  return {
+    ...payload,
+    products: payload.products.map((product) => ({
+      ...product,
+      quantityValue: stockDecimal(product.quantityValue),
+      servingSize: stockDecimal(product.servingSize),
+      measuredOnHand: Number(product.measuredOnHand),
+      stockQuantity: Number(product.stockQuantity),
+      batches: product.batches.map((batch) => ({
+        ...batch,
+        remainingQuantity: stockDecimal(batch.remainingQuantity) ?? new Prisma.Decimal(0),
+        expiryDate: batch.expiryDate ? new Date(batch.expiryDate) : null,
+      })),
+    })),
+    movements: payload.movements.map((movement) => ({
+      ...movement,
+      quantityDelta: Number(movement.quantityDelta),
+      balanceAfter: Number(movement.balanceAfter),
+      createdAt: new Date(movement.createdAt),
+      product: {
+        ...movement.product,
+        quantityValue: stockDecimal(movement.product.quantityValue),
+        servingSize: stockDecimal(movement.product.servingSize),
+      },
+      sale: movement.sale ? { receiptNumber: BigInt(movement.sale.receiptNumber) } : null,
+    })),
+    metrics: {
+      unitsOnHand: Number(payload.metrics.unitsOnHand),
+      stockValueLaari: Number(payload.metrics.stockValueLaari),
+      lowStock: Number(payload.metrics.lowStock),
+      outOfStock: Number(payload.metrics.outOfStock),
+    },
+  };
+}
+
+export async function getStockData(filters: StockFilters = {}) {
+  const registerId = filters.register && filters.register !== "all" ? filters.register : null;
+  const query = filters.query?.trim() || null;
+  const movementType = filters.movement && filters.movement !== "all"
+    ? filters.movement
+    : null;
+  const rows = await prisma.$queryRaw<Array<{ payload: StockDatabasePayload }>>(Prisma.sql`
+    SELECT public.stock_page_data(
+      ${registerId}::UUID,
+      ${movementType}::public."InventoryMovementType",
+      ${query}::TEXT,
+      ${STOCK_CANDIDATE_LIMIT}::INTEGER,
+      ${STOCK_RESULT_LIMIT}::INTEGER
+    ) AS payload
+  `);
+  const rawPayload = rows[0]?.payload;
+  if (!rawPayload) throw new Error("The Stock database query returned no data.");
+  const payload = hydrateStockPayload(rawPayload);
+
+  if (query && (payload.productCandidateCapHit || payload.movementCandidateCapHit)) {
+    console.warn(JSON.stringify({
+      event: "stock_hybrid_search_fallback",
+      queryLength: query.length,
+      registerFiltered: Boolean(registerId),
+      movementFiltered: Boolean(movementType),
+      productCandidateCapHit: payload.productCandidateCapHit,
+      movementCandidateCapHit: payload.movementCandidateCapHit,
+    }));
+    return getStockDataExhaustive(filters);
+  }
+
+  const productMatches = payload.products
+    .map((product) => ({
+      product,
+      score: query
+        ? fuzzySearchScore(query, [
+            product.name,
+            product.sku,
+            product.barcode,
+            product.category,
+            product.description,
+            product.kind,
+            product.register.name,
+            product.register.code,
+          ])
+        : 0,
+    }))
+    .filter((match) => match.score !== null)
+    .sort((left, right) => (left.score ?? 0) - (right.score ?? 0));
+  const products = productMatches.map((match) => match.product);
+  const movementMatches = payload.movements
+    .map((movement) => ({
+      movement,
+      score: query
+        ? fuzzySearchScore(query, [
+            movement.product.name,
+            movement.product.sku,
+            movement.register.name,
+            movement.register.code,
+            movement.type,
+            movement.reason,
+            movement.createdBy.name,
+            movement.sale ? `Receipt ${movement.sale.receiptNumber}` : null,
+            movement.quantityDelta,
+            movement.balanceAfter,
+          ])
+        : 0,
+    }))
+    .filter((match) => match.score !== null)
+    .sort((left, right) => (left.score ?? 0) - (right.score ?? 0));
+  const movements = movementMatches.slice(0, STOCK_RESULT_LIMIT).map((match) => match.movement);
+  const metrics = query
+    ? {
+        unitsOnHand: products.reduce((sum, product) => sum + product.stockQuantity, 0),
+        stockValueLaari: products.reduce(
+          (sum, product) => sum + product.costPriceLaari * product.stockQuantity,
+          0,
+        ),
+        lowStock: products.filter(
+          (product) => product.stockQuantity > 0 && product.stockQuantity <= product.lowStockThreshold,
+        ).length,
+        outOfStock: products.filter((product) => product.stockQuantity === 0).length,
+      }
+    : payload.metrics;
+
+  return {
+    registers: payload.registers,
+    products,
+    movements,
+    batches: products.flatMap((product) => product.batches.map((batch) => ({
+      ...batch,
+      product: {
+        id: product.id,
+        name: product.name,
+        sku: product.sku,
+        kind: product.kind,
+        quantityMetric: product.quantityMetric,
+        quantityValue: product.quantityValue,
+        servingSize: product.servingSize,
+      },
+    }))),
+    movementCount: query ? movementMatches.length : payload.movementCount,
+    metrics,
   };
 }
 

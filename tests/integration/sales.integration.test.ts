@@ -1,9 +1,6 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, test } from "bun:test";
 import type { PrismaClient } from "@/generated/prisma/client";
-
-const testDatabaseUrl = process.env.TEST_NEON_DB ?? process.env.NEON_DB;
-const runDatabaseTests = process.env.RUN_DB_TESTS === "1" && Boolean(testDatabaseUrl);
-const databaseDescribe = runDatabaseTests ? describe : describe.skip;
+import { databaseDescribe, testDatabaseUrl } from "@/tests/integration/database";
 
 databaseDescribe("Neon sale transaction", () => {
   let db: PrismaClient;

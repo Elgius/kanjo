@@ -1,11 +1,14 @@
 declare module "bun:test" {
   type TestBody = () => void | Promise<void>;
-  type Suite = (name: string, body: TestBody) => void;
+  type Suite = (name: string, body: TestBody, timeout?: number) => void;
 
   export const describe: Suite & { skip: Suite };
   export const test: Suite & { skip: Suite };
   export function beforeAll(body: TestBody): void;
   export function afterAll(body: TestBody): void;
+  export const mock: {
+    module(specifier: string, factory: () => unknown): void;
+  };
 
   type Matchers = {
     rejects: Matchers;

@@ -189,7 +189,7 @@ export async function recordSale(db: PrismaClient, input: RecordSaleInput) {
 
     for (const requirement of requirements) {
       const aggregate = await tx.inventoryBatch.aggregate({
-        where: { productId: requirement.productId },
+        where: { productId: requirement.productId, remainingQuantity: { gt: 0 } },
         _sum: { remainingQuantity: true },
       });
       const batchSummary = (deductions.get(requirement.productId) ?? [])
@@ -265,7 +265,7 @@ export async function receiveInventory(
         expiryDate: input.expiryDate,
       },
     });
-    const aggregate = await tx.inventoryBatch.aggregate({ where: { productId: product.id }, _sum: { remainingQuantity: true } });
+    const aggregate = await tx.inventoryBatch.aggregate({ where: { productId: product.id, remainingQuantity: { gt: 0 } }, _sum: { remainingQuantity: true } });
     await tx.inventoryMovement.create({
       data: {
         productId: product.id,
@@ -313,7 +313,7 @@ export async function writeOffBatch(db: PrismaClient, input: { batchId: string; 
     const quantity = measured(input.measuredQuantity);
     const updated = await tx.inventoryBatch.updateMany({ where: { id: batch.id, remainingQuantity: { gte: quantity } }, data: { remainingQuantity: { decrement: quantity } } });
     if (updated.count !== 1) throw new PosError("Write-off exceeds the batch balance.");
-    const aggregate = await tx.inventoryBatch.aggregate({ where: { productId: batch.productId }, _sum: { remainingQuantity: true } });
+    const aggregate = await tx.inventoryBatch.aggregate({ where: { productId: batch.productId, remainingQuantity: { gt: 0 } }, _sum: { remainingQuantity: true } });
     await tx.inventoryMovement.create({ data: {
       productId: batch.productId, registerId: batch.registerId, createdById: input.createdById,
       type: "ADJUSTMENT", quantityDelta: quantity.negated(), balanceAfter: aggregate._sum.remainingQuantity ?? new Prisma.Decimal(0), reason: input.reason,
