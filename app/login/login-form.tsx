@@ -4,6 +4,7 @@ import { Eye, EyeOff, LoaderCircle } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
 
+import { CatLoading } from "@/components/pos/cat-loading";
 import { authClient } from "@/lib/auth-client";
 
 export function LoginForm() {
@@ -21,6 +22,7 @@ export function LoginForm() {
     const identifier = String(formData.get("identifier")).trim();
     const password = String(formData.get("password"));
     const rememberMe = formData.get("rememberMe") === "on";
+    let navigationStarted = false;
 
     try {
       const { error: signInError } = identifier.includes("@")
@@ -32,20 +34,23 @@ export function LoginForm() {
         return;
       }
 
+      navigationStarted = true;
       router.replace("/");
-      router.refresh();
     } catch {
       setError("Unable to reach the authentication service. Please try again.");
     } finally {
-      setIsPending(false);
+      if (!navigationStarted) setIsPending(false);
     }
   }
 
   return (
-    <form
-      onSubmit={handleSubmit}
-      className="flex w-full max-w-[440px] flex-col gap-7"
-    >
+    <>
+      {isPending ? <CatLoading /> : null}
+      <form
+        onSubmit={handleSubmit}
+        aria-busy={isPending}
+        className="flex w-full max-w-[440px] flex-col gap-7"
+      >
       <div className="flex flex-col gap-2.5">
         <div className="flex items-center gap-2 lg:hidden">
           <span className="flex size-8 items-center justify-center rounded-lg bg-primary font-serif text-lg font-bold text-primary-foreground">
@@ -87,6 +92,7 @@ export function LoginForm() {
           />
           <button
             type="button"
+            disabled={isPending}
             onClick={() => setShowPassword((visible) => !visible)}
             aria-label={showPassword ? "Hide password" : "Show password"}
             aria-pressed={showPassword}
@@ -147,6 +153,7 @@ export function LoginForm() {
           Need access? Contact your store administrator.
         </p>
       </div>
-    </form>
+      </form>
+    </>
   );
 }

@@ -161,3 +161,92 @@
     @apply bg-background text-foreground;
   }
 }
+
+@keyframes kanjo-cat-cross {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(calc(100% - 112px));
+  }
+}
+
+@keyframes kanjo-cat-step {
+  0%,
+  100% {
+    transform: translateY(1px) rotate(-1deg);
+  }
+  50% {
+    transform: translateY(-5px) rotate(1deg);
+  }
+}
+
+@keyframes kanjo-pixel-pulse {
+  0%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  50% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+
+.kanjo-cat-track {
+  position: relative;
+  height: 116px;
+  width: min(78vw, 360px);
+  overflow: hidden;
+}
+
+.kanjo-cat-ground {
+  position: absolute;
+  right: 0;
+  bottom: 9px;
+  left: 0;
+  height: 2px;
+  background: repeating-linear-gradient(
+    90deg,
+    var(--border) 0 10px,
+    transparent 10px 17px
+  );
+}
+
+.kanjo-cat-runner {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  animation: kanjo-cat-cross 2.7s linear infinite;
+}
+
+.kanjo-cat-step {
+  display: block;
+  width: 112px;
+  flex: none;
+  padding-bottom: 8px;
+  animation: kanjo-cat-step 360ms steps(2, end) infinite;
+}
+
+.kanjo-loading-pixel {
+  display: block;
+  width: 6px;
+  height: 6px;
+  background: var(--chart-1);
+  animation: kanjo-pixel-pulse 900ms steps(2, end) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kanjo-cat-runner {
+    left: 50%;
+    width: auto;
+    transform: translateX(-56px);
+    animation: none;
+  }
+
+  .kanjo-cat-step,
+  .kanjo-loading-pixel {
+    animation: none;
+  }
+}
