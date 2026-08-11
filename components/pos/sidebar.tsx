@@ -115,11 +115,19 @@ function Navigation({ allowedPages }: { allowedPages: PageKey[] }) {
 
 function RegistryPicker({ registers }: { registers: SidebarRegister[] }) {
   const router = useRouter();
+  const pathname = usePathname();
+  const routeRegisterId = pathname.match(/^\/registers\/([^/]+)/)?.[1];
   const [activeRegisterId, setActiveRegisterId] = useState(
-    registers.find((register) => register.isOpen)?.id ?? registers[0]?.id ?? "",
+    registers.find((register) => register.id === routeRegisterId)?.id ??
+      registers.find((register) => register.isOpen)?.id ??
+      registers[0]?.id ??
+      "",
   );
+  const currentRegisterId = registers.some((register) => register.id === routeRegisterId)
+    ? routeRegisterId!
+    : activeRegisterId;
   const activeRegister =
-    registers.find((register) => register.id === activeRegisterId) ?? registers[0];
+    registers.find((register) => register.id === currentRegisterId) ?? registers[0];
 
   if (!activeRegister) return null;
 
@@ -163,11 +171,11 @@ function RegistryPicker({ registers }: { registers: SidebarRegister[] }) {
             </DropdownMenuLabel>
           </DropdownMenuGroup>
           <DropdownMenuRadioGroup
-            value={activeRegisterId}
+            value={currentRegisterId}
             onValueChange={(value) => {
               const registerId = String(value);
               setActiveRegisterId(registerId);
-              router.push(`/registers?register=${registerId}`);
+              router.push(`/registers/${registerId}`);
             }}
           >
             {registers.map((register) => (

@@ -554,6 +554,7 @@ type SellableItem = {
   id: string;
   name: string;
   sku: string | null;
+  category: string;
   stockQuantity: number;
   retailPriceLaari: number;
   soldOutReason: string | null;
@@ -568,6 +569,7 @@ async function getSellableItems(register: { id: string; purpose: string }): Prom
         id: true,
         name: true,
         sku: true,
+        category: true,
         retailPriceLaari: true,
         kind: true,
         quantityMetric: true,
@@ -590,12 +592,12 @@ async function getSellableItems(register: { id: string; purpose: string }): Prom
           id: product.id,
           name: product.name,
           sku: product.sku,
+          category: product.category,
           stockQuantity: available,
           retailPriceLaari: product.retailPriceLaari,
           soldOutReason: available ? null : "Out of usable stock",
         };
-      })
-      .filter((product) => product.stockQuantity > 0);
+      });
   }
 
   if (register.purpose === "RESTAURANT") {
@@ -606,6 +608,7 @@ async function getSellableItems(register: { id: string; purpose: string }): Prom
       select: {
         id: true,
         name: true,
+        category: true,
         retailPriceLaari: true,
         ingredients: {
           select: {
@@ -633,6 +636,7 @@ async function getSellableItems(register: { id: string; purpose: string }): Prom
           id: item.id,
           name: item.name,
           sku: null,
+          category: item.category,
           stockQuantity: 0,
           retailPriceLaari: item.retailPriceLaari,
           soldOutReason: "Recipe is incomplete",
@@ -666,6 +670,7 @@ async function getSellableItems(register: { id: string; purpose: string }): Prom
         id: item.id,
         name: item.name,
         sku: null,
+        category: item.category,
         stockQuantity: limiting.count,
         retailPriceLaari: item.retailPriceLaari,
         soldOutReason: limiting.count ? null : limiting.reason,
@@ -719,6 +724,56 @@ export async function getRegistersData(selectedRegisterId?: string) {
       activeShiftSalesLaari,
       cashOnHandLaari,
     },
+  };
+}
+
+export async function getRegisterManagementData(registerId: string) {
+  const registers = await getRegisterSummaries();
+  const register = registers.find((candidate) => candidate.id === registerId) ?? null;
+  if (!register) return null;
+
+  const shift = register.shifts[0] ?? null;
+  const [items, lastSale, heldOrders] = await Promise.all([
+    getSellableItems(register),
+    shift
+      ? prisma.sale.findFirst({
+          where: { registerShiftId: shift.id, status: "COMPLETED" },
+          orderBy: { createdAt: "desc" },
+          select: { id: true, receiptNumber: true, totalLaari: true, createdAt: true },
+        })
+      : Promise.resolve(null),
+    shift
+      ? prisma.registerOrder.findMany({
+          where: { registerShiftId: shift.id, status: "HELD" },
+          orderBy: { heldAt: "desc" },
+          take: 20,
+          select: {
+            id: true,
+            customerNote: true,
+            paymentMethod: true,
+            totalLaari: true,
+            heldAt: true,
+            items: {
+              orderBy: { id: "asc" },
+              select: { productId: true, menuItemId: true, quantity: true },
+            },
+          },
+        })
+      : Promise.resolve([]),
+  ]);
+
+  return {
+    register,
+    shift,
+    items,
+    lastSale,
+    heldOrders: heldOrders.map((order) => ({
+      ...order,
+      items: order.items.flatMap((item) => {
+        const itemId = item.productId ?? item.menuItemId;
+        return itemId ? [{ itemId, quantity: item.quantity }] : [];
+      }),
+    })),
   };
 }
 

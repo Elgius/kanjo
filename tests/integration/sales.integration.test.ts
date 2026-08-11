@@ -5,6 +5,7 @@ import { databaseDescribe, testDatabaseUrl } from "@/tests/integration/database"
 databaseDescribe("Neon sale transaction", () => {
   let db: PrismaClient;
   let recordSale: typeof import("@/lib/pos/sales").recordSale;
+  let holdRegisterOrder: typeof import("@/lib/pos/orders").holdRegisterOrder;
   let userId: string;
   let roleId: string;
   let registerId: string;
@@ -16,6 +17,7 @@ databaseDescribe("Neon sale transaction", () => {
     process.env.NEON_DB = testDatabaseUrl;
     ({ prisma: db } = await import("@/lib/db"));
     ({ recordSale } = await import("@/lib/pos/sales"));
+    ({ holdRegisterOrder } = await import("@/lib/pos/orders"));
 
     const role = await db.role.create({
       data: { name: marker, normalizedName: marker },
@@ -56,6 +58,7 @@ databaseDescribe("Neon sale transaction", () => {
     await db.auditLog.deleteMany({ where: { actorId: userId } });
     await db.inventoryMovement.deleteMany({ where: { createdById: userId } });
     await db.sale.deleteMany({ where: { createdById: userId } });
+    await db.registerOrder.deleteMany({ where: { createdById: userId } });
     await db.inventoryBatch.deleteMany({ where: { productId } });
     await db.product.deleteMany({ where: { id: productId } });
     await db.registerShift.deleteMany({ where: { registerId } });
@@ -108,5 +111,37 @@ databaseDescribe("Neon sale transaction", () => {
     expect(await db.sale.count({ where: { createdById: userId } })).toBe(before);
     expect(await db.auditLog.count({ where: { actorId: userId } })).toBe(auditBefore);
     expect(Number((await db.inventoryBatch.aggregate({ where: { productId }, _sum: { remainingQuantity: true } }))._sum.remainingQuantity)).toBe(3);
+  });
+
+  test("holds an order without stock movement and completes it with the sale", async () => {
+    const before = await db.inventoryBatch.aggregate({
+      where: { productId },
+      _sum: { remainingQuantity: true },
+    });
+    const order = await holdRegisterOrder(db, {
+      shiftId,
+      createdById: userId,
+      paymentMethod: "CASH",
+      customerNote: "Integration hold",
+      items: [{ itemId: productId, quantity: 1 }],
+      audit: { actorLabel: marker },
+    });
+    expect(order.status).toBe("HELD");
+    expect(Number((await db.inventoryBatch.aggregate({
+      where: { productId },
+      _sum: { remainingQuantity: true },
+    }))._sum.remainingQuantity)).toBe(Number(before._sum.remainingQuantity));
+
+    const sale = await recordSale(db, {
+      shiftId,
+      createdById: userId,
+      heldOrderId: order.id,
+      paymentMethod: "CASH",
+      items: [{ itemId: productId, quantity: 1 }],
+      audit: { actorLabel: marker },
+    });
+    const completed = await db.registerOrder.findUniqueOrThrow({ where: { id: order.id } });
+    expect(completed.status).toBe("COMPLETED");
+    expect(completed.saleId).toBe(sale.id);
   });
 });

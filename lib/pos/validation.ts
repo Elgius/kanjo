@@ -168,6 +168,54 @@ export function parseSaleForm(formData: FormData) {
   } as const;
 }
 
+type RegisterCartItem = { itemId: string; quantity: number };
+
+function parseRegisterCartItems(value: FormDataEntryValue | null) {
+  if (typeof value !== "string") return null;
+
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!Array.isArray(parsed) || parsed.length < 1 || parsed.length > 100) return null;
+
+    const items: RegisterCartItem[] = [];
+    for (const item of parsed) {
+      if (!item || typeof item !== "object") return null;
+      const itemId = "itemId" in item && typeof item.itemId === "string"
+        ? item.itemId.trim()
+        : "";
+      const quantity = "quantity" in item ? Number(item.quantity) : NaN;
+      if (!itemId || !Number.isSafeInteger(quantity) || quantity < 1) return null;
+      items.push({ itemId, quantity });
+    }
+    return items;
+  } catch {
+    return null;
+  }
+}
+
+export function parseRegisterCartForm(formData: FormData) {
+  const items = parseRegisterCartItems(formData.get("items"));
+  const paymentMethod = text(formData, "paymentMethod");
+  const heldOrderId = text(formData, "heldOrderId") || null;
+
+  if (!items) {
+    return { ok: false, error: "Add at least one available item to the order." } as const;
+  }
+  if (!(["CASH", "CARD", "MOBILE"] as const).includes(paymentMethod as "CASH" | "CARD" | "MOBILE")) {
+    return { ok: false, error: "Select a supported payment method." } as const;
+  }
+
+  return {
+    ok: true,
+    data: {
+      items,
+      heldOrderId,
+      customerNote: text(formData, "customerNote").slice(0, 500) || null,
+      paymentMethod: paymentMethod as "CASH" | "CARD" | "MOBILE",
+    },
+  } as const;
+}
+
 export function parseReceiveStock(formData: FormData) {
   const stockUnits = nonNegativeInteger(text(formData, "stockUnits"));
   const rawExpiry = text(formData, "expiryDate");

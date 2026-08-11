@@ -89,7 +89,7 @@ export default async function RegistersPage({ searchParams }: PageProps<"/regist
               <Link
                 prefetch={false}
                 key={register.id}
-                href={`/registers?register=${register.id}`}
+                href={`/registers/${register.id}`}
                 className={cn("flex h-[82px] flex-col justify-between rounded-[9px] border border-border p-[13px]", isSelected && "border-primary bg-primary text-primary-foreground", !openShift && "opacity-70")}
               >
                 <div className="flex items-center justify-between"><h3 className="text-[13px] font-semibold">{register.name}</h3><span className={cn("text-[10px]", isSelected ? "text-chart-1" : "text-muted-foreground")}>{openShift ? "● OPEN" : "○ CLOSED"}</span></div>

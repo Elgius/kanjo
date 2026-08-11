@@ -14,6 +14,7 @@ export class PosError extends Error {}
 export type RecordSaleInput = {
   shiftId: string;
   createdById: string;
+  heldOrderId?: string | null;
   paymentMethod: PaymentMethod;
   items: ReadonlyArray<{ itemId: string; quantity: number }>;
   audit: { actorLabel: string; request?: AuditRequestContext };
@@ -95,6 +96,18 @@ export async function recordSale(db: PrismaClient, input: RecordSaleInput) {
       select: { id: true, registerId: true, register: { select: { purpose: true } } },
     });
     if (!shift) throw new PosError("The selected register does not have an open shift.");
+
+    if (input.heldOrderId) {
+      const heldOrder = await tx.registerOrder.findFirst({
+        where: {
+          id: input.heldOrderId,
+          registerShiftId: shift.id,
+          status: "HELD",
+        },
+        select: { id: true },
+      });
+      if (!heldOrder) throw new PosError("That held order is no longer available.");
+    }
 
     let lines: Array<{
       productId?: string;
@@ -187,6 +200,23 @@ export async function recordSale(db: PrismaClient, input: RecordSaleInput) {
       select: { id: true, receiptNumber: true, totalLaari: true },
     });
 
+    if (input.heldOrderId) {
+      const completed = await tx.registerOrder.updateMany({
+        where: {
+          id: input.heldOrderId,
+          registerShiftId: shift.id,
+          status: "HELD",
+        },
+        data: {
+          status: "COMPLETED",
+          completedAt: new Date(),
+          paymentMethod: input.paymentMethod,
+          saleId: sale.id,
+        },
+      });
+      if (completed.count !== 1) throw new PosError("That held order changed. Try again.");
+    }
+
     for (const requirement of requirements) {
       const aggregate = await tx.inventoryBatch.aggregate({
         where: { productId: requirement.productId, remainingQuantity: { gt: 0 } },
@@ -226,6 +256,7 @@ export async function recordSale(db: PrismaClient, input: RecordSaleInput) {
           lineCount: lines.length,
           registerId: shift.registerId,
           registerPurpose: shift.register.purpose,
+          heldOrderId: input.heldOrderId ?? null,
         },
         request: input.audit.request,
       }),

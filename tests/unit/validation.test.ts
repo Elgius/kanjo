@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { parseMenuItemForm, parseProductForm, parseRegisterForm, parseSaleForm, parseStockAdjustment } from "@/lib/pos/validation";
+import { parseMenuItemForm, parseProductForm, parseRegisterCartForm, parseRegisterForm, parseSaleForm, parseStockAdjustment } from "@/lib/pos/validation";
 
 describe("POS form validation", () => {
   test("normalizes a valid product", () => {
@@ -75,6 +75,26 @@ describe("POS form validation", () => {
 
     sale.set("paymentMethod", "CRYPTO");
     expect(parseSaleForm(sale).ok).toBe(false);
+  });
+
+  test("validates multi-item register carts", () => {
+    const cart = new FormData();
+    cart.set("items", JSON.stringify([
+      { itemId: "first", quantity: 2 },
+      { itemId: "second", quantity: 1 },
+    ]));
+    cart.set("paymentMethod", "MOBILE");
+    cart.set("customerNote", "  Less ice  ");
+    const result = parseRegisterCartForm(cart);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.items).toHaveLength(2);
+      expect(result.data.customerNote).toBe("Less ice");
+      expect(result.data.paymentMethod).toBe("MOBILE");
+    }
+
+    cart.set("items", JSON.stringify([{ itemId: "first", quantity: 0 }]));
+    expect(parseRegisterCartForm(cart).ok).toBe(false);
   });
 
   test("requires a supported register purpose", () => {

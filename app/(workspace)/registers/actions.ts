@@ -18,12 +18,14 @@ import {
 
 function registersRedirect(kind: "success" | "error", message: string, registerId?: string): never {
   const params = new URLSearchParams({ [kind]: message });
-  if (registerId) params.set("register", registerId);
-  redirect(`/registers?${params.toString()}`);
+  redirect(registerId
+    ? `/registers/${registerId}?${params.toString()}`
+    : `/registers?${params.toString()}`);
 }
 
-function refreshRegisters() {
+function refreshRegisters(registerId?: string) {
   revalidatePath("/registers");
+  if (registerId) revalidatePath(`/registers/${registerId}`);
   revalidatePath("/inventory");
   revalidatePath("/stock");
   revalidatePath("/");
@@ -87,7 +89,7 @@ export async function createRegisterAction(formData: FormData) {
     registersRedirect("error", message);
   }
 
-  refreshRegisters();
+  refreshRegisters(register.id);
   registersRedirect("success", "Register added.", register.id);
 }
 
@@ -126,7 +128,7 @@ export async function openShiftAction(registerId: string, formData: FormData) {
     registersRedirect("error", message, registerId);
   }
 
-  refreshRegisters();
+  refreshRegisters(registerId);
   registersRedirect("success", "Shift opened.", registerId);
 }
 
@@ -170,7 +172,7 @@ export async function closeShiftAction(shiftId: string, registerId: string, form
     registersRedirect("error", message, registerId);
   }
 
-  refreshRegisters();
+  refreshRegisters(registerId);
   registersRedirect("success", "Shift closed.", registerId);
 }
 
@@ -201,6 +203,6 @@ export async function recordSaleAction(shiftId: string, registerId: string, form
     registersRedirect("error", message, registerId);
   }
 
-  refreshRegisters();
+  refreshRegisters(registerId);
   registersRedirect("success", `Receipt #${receiptNumber} recorded.`, registerId);
 }

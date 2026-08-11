@@ -25,6 +25,7 @@ model User {
   openedShifts    RegisterShift[]     @relation("ShiftOpenedBy")
   closedShifts    RegisterShift[]     @relation("ShiftClosedBy")
   sales           Sale[]              @relation("SaleCreatedBy")
+  registerOrders  RegisterOrder[]     @relation("RegisterOrderCreatedBy")
   stockChanges    InventoryMovement[]
   receivedBatches InventoryBatch[]    @relation("BatchReceivedBy")
   auditLogs       AuditLog[]          @relation("AuditActor")
@@ -126,6 +127,12 @@ enum PaymentMethod {
   MOBILE
 }
 
+enum RegisterOrderStatus {
+  HELD
+  COMPLETED
+  CANCELLED
+}
+
 enum InventoryMovementType {
   INITIAL
   ADJUSTMENT
@@ -144,29 +151,30 @@ enum RegisterPurpose {
 }
 
 model Product {
-  id                String               @id @default(uuid()) @db.Uuid
-  registerId        String               @db.Uuid
-  sku               String               @unique
-  barcode           String?              @unique
-  name              String
-  category          String
-  description       String?
-  retailPriceLaari  Int
-  costPriceLaari    Int                  @default(0)
-  lowStockThreshold Int                  @default(10)
-  kind              ProductKind          @default(GOODS)
-  quantityMetric    String?
-  quantityValue     Decimal?             @db.Decimal(12, 3)
-  servingSize       Decimal?             @db.Decimal(12, 3)
-  searchText        String               @default("") @db.Text
-  active            Boolean              @default(true)
-  createdAt         DateTime             @default(now())
-  updatedAt         DateTime             @updatedAt
-  register          CashRegister         @relation(fields: [registerId], references: [id], onDelete: Restrict)
-  saleItems         SaleItem[]
-  stockMovements    InventoryMovement[]
-  batches           InventoryBatch[]
-  menuIngredients   MenuItemIngredient[]
+  id                 String               @id @default(uuid()) @db.Uuid
+  registerId         String               @db.Uuid
+  sku                String               @unique
+  barcode            String?              @unique
+  name               String
+  category           String
+  description        String?
+  retailPriceLaari   Int
+  costPriceLaari     Int                  @default(0)
+  lowStockThreshold  Int                  @default(10)
+  kind               ProductKind          @default(GOODS)
+  quantityMetric     String?
+  quantityValue      Decimal?             @db.Decimal(12, 3)
+  servingSize        Decimal?             @db.Decimal(12, 3)
+  searchText         String               @default("") @db.Text
+  active             Boolean              @default(true)
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+  register           CashRegister         @relation(fields: [registerId], references: [id], onDelete: Restrict)
+  saleItems          SaleItem[]
+  stockMovements     InventoryMovement[]
+  batches            InventoryBatch[]
+  menuIngredients    MenuItemIngredient[]
+  registerOrderItems RegisterOrderItem[]
 
   @@index([active, updatedAt(sort: Desc)])
   @@index([registerId, active, name])
@@ -194,17 +202,18 @@ model CashRegister {
 }
 
 model MenuItem {
-  id               String               @id @default(uuid()) @db.Uuid
-  registerId       String               @db.Uuid
-  name             String
-  category         String
-  retailPriceLaari Int
-  active           Boolean              @default(true)
-  createdAt        DateTime             @default(now())
-  updatedAt        DateTime             @updatedAt
-  register         CashRegister         @relation(fields: [registerId], references: [id], onDelete: Restrict)
-  ingredients      MenuItemIngredient[]
-  saleItems        SaleItem[]
+  id                 String               @id @default(uuid()) @db.Uuid
+  registerId         String               @db.Uuid
+  name               String
+  category           String
+  retailPriceLaari   Int
+  active             Boolean              @default(true)
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+  register           CashRegister         @relation(fields: [registerId], references: [id], onDelete: Restrict)
+  ingredients        MenuItemIngredient[]
+  saleItems          SaleItem[]
+  registerOrderItems RegisterOrderItem[]
 
   @@unique([registerId, name])
   @@index([registerId, active, name])
@@ -241,19 +250,20 @@ model InventoryBatch {
 }
 
 model RegisterShift {
-  id               String       @id @default(uuid()) @db.Uuid
-  registerId       String       @db.Uuid
+  id               String          @id @default(uuid()) @db.Uuid
+  registerId       String          @db.Uuid
   openedById       String
   closedById       String?
-  status           ShiftStatus  @default(OPEN)
-  openingCashLaari Int          @default(0)
+  status           ShiftStatus     @default(OPEN)
+  openingCashLaari Int             @default(0)
   closingCashLaari Int?
-  openedAt         DateTime     @default(now())
+  openedAt         DateTime        @default(now())
   closedAt         DateTime?
-  register         CashRegister @relation(fields: [registerId], references: [id], onDelete: Restrict)
-  openedBy         User         @relation("ShiftOpenedBy", fields: [openedById], references: [id], onDelete: Restrict)
-  closedBy         User?        @relation("ShiftClosedBy", fields: [closedById], references: [id], onDelete: Restrict)
+  register         CashRegister    @relation(fields: [registerId], references: [id], onDelete: Restrict)
+  openedBy         User            @relation("ShiftOpenedBy", fields: [openedById], references: [id], onDelete: Restrict)
+  closedBy         User?           @relation("ShiftClosedBy", fields: [closedById], references: [id], onDelete: Restrict)
   sales            Sale[]
+  registerOrders   RegisterOrder[]
 
   @@index([registerId, status, openedAt(sort: Desc)])
   @@index([openedById])
@@ -276,6 +286,7 @@ model Sale {
   createdBy       User                @relation("SaleCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
   items           SaleItem[]
   stockMovements  InventoryMovement[]
+  registerOrder   RegisterOrder?
 
   @@index([status, createdAt(sort: Desc)])
   @@index([registerShiftId, createdAt(sort: Desc)])
@@ -302,6 +313,52 @@ model SaleItem {
   @@index([productId])
   @@index([menuItemId])
   @@map("sale_items")
+}
+
+model RegisterOrder {
+  id              String              @id @default(uuid()) @db.Uuid
+  registerShiftId String              @db.Uuid
+  createdById     String
+  saleId          String?             @unique @db.Uuid
+  status          RegisterOrderStatus @default(HELD)
+  customerNote    String?
+  paymentMethod   PaymentMethod?
+  subtotalLaari   Int
+  totalLaari      Int
+  heldAt          DateTime            @default(now())
+  completedAt     DateTime?
+  cancelledAt     DateTime?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+  registerShift   RegisterShift       @relation(fields: [registerShiftId], references: [id], onDelete: Restrict)
+  createdBy       User                @relation("RegisterOrderCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  sale            Sale?               @relation(fields: [saleId], references: [id], onDelete: SetNull)
+  items           RegisterOrderItem[]
+
+  @@index([registerShiftId, status, heldAt(sort: Desc)])
+  @@index([createdById])
+  @@map("register_orders")
+}
+
+model RegisterOrderItem {
+  id             String        @id @default(uuid()) @db.Uuid
+  orderId        String        @db.Uuid
+  productId      String?       @db.Uuid
+  menuItemId     String?       @db.Uuid
+  productName    String
+  productSku     String?
+  itemCategory   String
+  quantity       Int
+  unitPriceLaari Int
+  lineTotalLaari Int
+  order          RegisterOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product        Product?      @relation(fields: [productId], references: [id], onDelete: Restrict)
+  menuItem       MenuItem?     @relation(fields: [menuItemId], references: [id], onDelete: Restrict)
+
+  @@index([orderId])
+  @@index([productId])
+  @@index([menuItemId])
+  @@map("register_order_items")
 }
 
 model InventoryMovement {
