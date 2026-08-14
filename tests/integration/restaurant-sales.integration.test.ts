@@ -37,6 +37,7 @@ databaseDescribe("restaurant recipe sale", () => {
     if (!db) return;
     await db.auditLog.deleteMany({ where: { actorId: userId } });
     await db.inventoryMovement.deleteMany({ where: { createdById: userId } });
+    await db.bill.deleteMany({ where: { sale: { createdById: userId } } });
     await db.sale.deleteMany({ where: { createdById: userId } });
     await db.menuItem.deleteMany({ where: { registerId } });
     await db.inventoryBatch.deleteMany({ where: { registerId } });

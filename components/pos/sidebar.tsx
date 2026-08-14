@@ -10,6 +10,7 @@ import {
   LayoutDashboard,
   LogOut,
   Package,
+  ReceiptText,
   Settings,
   Store,
 } from "lucide-react";
@@ -45,6 +46,7 @@ const navigation = [
   { page: "INVENTORY", href: "/inventory", label: "Inventory", icon: Package },
   { page: "STOCK", href: "/stock", label: "Stock", icon: Boxes },
   { page: "REPORTING", href: "/reporting", label: "Reporting", icon: ChartNoAxesCombined },
+  { page: "BILL_HISTORY", href: "/bill-history", label: "Bill history", icon: ReceiptText },
   { page: "SETTINGS", href: "/settings", label: "Settings", icon: Settings },
 ] as const;
 

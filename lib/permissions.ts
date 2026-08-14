@@ -6,6 +6,7 @@ export const PAGE_DEFINITIONS = [
   { key: "INVENTORY", label: "Inventory", href: "/inventory", editable: true },
   { key: "STOCK", label: "Stock", href: "/stock", editable: false },
   { key: "REPORTING", label: "Reporting", href: "/reporting", editable: false },
+  { key: "BILL_HISTORY", label: "Bill history", href: "/bill-history", editable: false },
   { key: "SETTINGS", label: "Settings", href: "/settings", editable: false },
   { key: "AUDIT_LOG", label: "Audit log", href: "/settings/audit-log", editable: false },
 ] as const satisfies ReadonlyArray<{

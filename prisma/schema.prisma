@@ -42,6 +42,7 @@ enum PageKey {
   INVENTORY
   STOCK
   REPORTING
+  BILL_HISTORY
   SETTINGS
   AUDIT_LOG
 }
@@ -302,11 +303,34 @@ model Sale {
   items           SaleItem[]
   stockMovements  InventoryMovement[]
   registerOrder   RegisterOrder?
+  bill            Bill?
 
   @@index([status, createdAt(sort: Desc)])
   @@index([registerShiftId, createdAt(sort: Desc)])
   @@index([createdById])
   @@map("sales")
+}
+
+model Bill {
+  id              String        @id @default(uuid()) @db.Uuid
+  saleId          String        @unique @db.Uuid
+  receiptNumber   BigInt        @unique
+  registerId      String        @db.Uuid
+  registerName    String
+  registerCode    String
+  cashierName     String
+  paymentMethod   PaymentMethod
+  subtotalLaari   Int
+  totalLaari      Int
+  items           Json
+  soldAt          DateTime
+  createdAt       DateTime      @default(now())
+  sale            Sale          @relation(fields: [saleId], references: [id], onDelete: Restrict)
+
+  @@index([soldAt(sort: Desc), id(sort: Desc)])
+  @@index([registerId, soldAt(sort: Desc), id(sort: Desc)])
+  @@index([paymentMethod, soldAt(sort: Desc)])
+  @@map("bills")
 }
 
 model SaleItem {

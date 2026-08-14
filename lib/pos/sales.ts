@@ -14,6 +14,7 @@ export class PosError extends Error {}
 export type RecordSaleInput = {
   shiftId: string;
   createdById: string;
+  cashierName?: string;
   heldOrderId?: string | null;
   paymentMethod: PaymentMethod;
   items: ReadonlyArray<{ itemId: string; quantity: number }>;
@@ -93,7 +94,11 @@ export async function recordSale(db: PrismaClient, input: RecordSaleInput) {
   return db.$transaction(async (tx) => {
     const shift = await tx.registerShift.findFirst({
       where: { id: input.shiftId, status: "OPEN" },
-      select: { id: true, registerId: true, register: { select: { purpose: true } } },
+      select: {
+        id: true,
+        registerId: true,
+        register: { select: { purpose: true, name: true, code: true } },
+      },
     });
     if (!shift) throw new PosError("The selected register does not have an open shift.");
 
@@ -197,7 +202,31 @@ export async function recordSale(db: PrismaClient, input: RecordSaleInput) {
         totalLaari,
         items: { create: lines },
       },
-      select: { id: true, receiptNumber: true, totalLaari: true },
+      select: { id: true, receiptNumber: true, totalLaari: true, createdAt: true },
+    });
+
+    await tx.bill.create({
+      data: {
+        saleId: sale.id,
+        receiptNumber: sale.receiptNumber,
+        registerId: shift.registerId,
+        registerName: shift.register.name,
+        registerCode: shift.register.code,
+        cashierName: input.cashierName ?? input.audit.actorLabel,
+        paymentMethod: input.paymentMethod,
+        subtotalLaari: totalLaari,
+        totalLaari,
+        items: lines.map((line, index) => ({
+          id: `${sale.id}:${index + 1}`,
+          productName: line.productName,
+          productSku: line.productSku,
+          itemCategory: line.itemCategory,
+          quantity: line.quantity,
+          unitPriceLaari: line.unitPriceLaari,
+          lineTotalLaari: line.lineTotalLaari,
+        })),
+        soldAt: sale.createdAt,
+      },
     });
 
     if (input.heldOrderId) {

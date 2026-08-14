@@ -62,6 +62,7 @@ databaseDescribe("Neon sale transaction", () => {
     if (!db) return;
     await db.auditLog.deleteMany({ where: { actorId: userId } });
     await db.inventoryMovement.deleteMany({ where: { createdById: userId } });
+    await db.bill.deleteMany({ where: { sale: { createdById: userId } } });
     await db.sale.deleteMany({ where: { createdById: userId } });
     await db.registerOrder.deleteMany({ where: { createdById: userId } });
     await db.inventoryBatch.deleteMany({ where: { productId } });
@@ -84,11 +85,12 @@ databaseDescribe("Neon sale transaction", () => {
     });
 
     expect(sale.totalLaari).toBe(5_000);
-    const [product, storedSale, movement, audit] = await Promise.all([
+    const [product, storedSale, movement, audit, bill] = await Promise.all([
       db.inventoryBatch.aggregate({ where: { productId }, _sum: { remainingQuantity: true } }),
       db.sale.findUniqueOrThrow({ where: { id: sale.id }, include: { items: true } }),
       db.inventoryMovement.findFirstOrThrow({ where: { saleId: sale.id } }),
       db.auditLog.findFirstOrThrow({ where: { event: "SALE_RECORD", targetId: sale.id } }),
+      db.bill.findUniqueOrThrow({ where: { saleId: sale.id } }),
     ]);
     expect(Number(product._sum.remainingQuantity)).toBe(3);
     expect(storedSale.items).toHaveLength(1);
@@ -98,6 +100,10 @@ databaseDescribe("Neon sale transaction", () => {
     expect(Number(movement.balanceAfter)).toBe(3);
     expect(audit.outcome).toBe("SUCCESS");
     expect(audit.actorId).toBe(userId);
+    expect(bill.receiptNumber).toBe(sale.receiptNumber);
+    expect(bill.registerId).toBe(registerId);
+    expect(bill.totalLaari).toBe(5_000);
+    expect(Array.isArray(bill.items)).toBe(true);
   });
 
   test("rolls back the sale when stock is insufficient", async () => {

@@ -29,6 +29,7 @@ function refreshRegister(registerId: string) {
   revalidatePath("/registers");
   revalidatePath("/inventory");
   revalidatePath("/stock");
+  revalidatePath("/bill-history");
   revalidatePath("/");
   revalidatePath("/", "layout");
 }
@@ -68,6 +69,7 @@ export async function checkoutRegisterSaleAction(
     const sale = await recordSale(prisma, {
       shiftId,
       createdById: authorization.user.id,
+      cashierName: authorization.user.name,
       heldOrderId: parsed.data.heldOrderId,
       paymentMethod: parsed.data.paymentMethod,
       items: parsed.data.items,

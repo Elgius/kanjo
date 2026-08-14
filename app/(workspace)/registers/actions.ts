@@ -28,6 +28,7 @@ function refreshRegisters(registerId?: string) {
   if (registerId) revalidatePath(`/registers/${registerId}`);
   revalidatePath("/inventory");
   revalidatePath("/stock");
+  revalidatePath("/bill-history");
   revalidatePath("/");
   revalidatePath("/", "layout");
 }
@@ -189,6 +190,7 @@ export async function recordSaleAction(shiftId: string, registerId: string, form
     const sale = await recordSale(prisma, {
       shiftId,
       createdById: authorization.user.id,
+      cashierName: authorization.user.name,
       paymentMethod: parsed.data.paymentMethod,
       items: parsed.data.items,
       audit: {

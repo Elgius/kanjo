@@ -262,11 +262,14 @@
   }
 
   .receipt-print-root,
-  .receipt-print-root * {
+  .receipt-print-root *,
+  .bill-history-print-root,
+  .bill-history-print-root * {
     visibility: visible !important;
   }
 
-  .receipt-print-root {
+  .receipt-print-root,
+  .bill-history-print-root {
     position: fixed;
     top: 0;
     left: 0;

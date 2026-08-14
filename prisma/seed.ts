@@ -22,6 +22,7 @@ async function main() {
           { page: "INVENTORY", level: "EDIT" },
           { page: "STOCK", level: "VIEW" },
           { page: "REPORTING", level: "VIEW" },
+          { page: "BILL_HISTORY", level: "VIEW" },
           { page: "SETTINGS", level: "VIEW" },
           { page: "AUDIT_LOG", level: "VIEW" },
         ],

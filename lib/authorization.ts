@@ -123,6 +123,7 @@ const deniedPath: Record<PageKey, string> = {
   INVENTORY: "/inventory?error=You%20do%20not%20have%20permission%20to%20edit%20inventory.",
   STOCK: "/stock?error=You%20do%20not%20have%20permission%20to%20edit%20stock.",
   REPORTING: "/reporting",
+  BILL_HISTORY: "/bill-history",
   SETTINGS: "/settings?error=Site%20administrator%20access%20is%20required.",
   AUDIT_LOG: "/settings/audit-log",
 };
