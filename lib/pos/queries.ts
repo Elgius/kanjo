@@ -17,13 +17,14 @@ export type InventoryFilters = {
 };
 
 export async function getInventoryData(filters: InventoryFilters = {}) {
-  const [rawProducts, batchBalances, registers] = await Promise.all([
+  const [rawProducts, batchBalances, registers, categoryRecords] = await Promise.all([
     prisma.product.findMany({
       where: { active: true },
       orderBy: { updatedAt: "desc" },
       select: {
         id: true,
         registerId: true,
+        categoryId: true,
         sku: true,
         barcode: true,
         name: true,
@@ -50,6 +51,10 @@ export async function getInventoryData(filters: InventoryFilters = {}) {
       orderBy: { name: "asc" },
       select: { id: true, code: true, name: true, purpose: true },
     }),
+    prisma.productCategory.findMany({
+      orderBy: { name: "asc" },
+      select: { id: true, name: true, _count: { select: { products: true } } },
+    }),
   ]);
   const balanceByProduct = new Map(
     batchBalances.map((balance) => [balance.productId, quantityNumber(balance._sum.remainingQuantity)]),
@@ -59,7 +64,11 @@ export async function getInventoryData(filters: InventoryFilters = {}) {
     return { ...product, measuredOnHand, stockQuantity: stockUnitsFromMeasured(product, measuredOnHand) };
   });
 
-  const categories = [...new Set(allProducts.map((product) => product.category))].sort();
+  const categories = categoryRecords.map((category) => ({
+    id: category.id,
+    name: category.name,
+    productCount: category._count.products,
+  }));
   const query = filters.query?.trim().toLocaleLowerCase();
   const category = filters.category && filters.category !== "all" ? filters.category : null;
   const status = filters.status ?? "all";
@@ -727,13 +736,13 @@ export async function getRegistersData(selectedRegisterId?: string) {
   };
 }
 
-export async function getRegisterManagementData(registerId: string) {
+export async function getRegisterManagementData(registerId: string, receiptId?: string) {
   const registers = await getRegisterSummaries();
   const register = registers.find((candidate) => candidate.id === registerId) ?? null;
   if (!register) return null;
 
   const shift = register.shifts[0] ?? null;
-  const [items, lastSale, heldOrders] = await Promise.all([
+  const [items, lastSale, heldOrders, receipt] = await Promise.all([
     getSellableItems(register),
     shift
       ? prisma.sale.findFirst({
@@ -760,6 +769,35 @@ export async function getRegisterManagementData(registerId: string) {
           },
         })
       : Promise.resolve([]),
+    receiptId
+      ? prisma.sale.findFirst({
+          where: {
+            id: receiptId,
+            status: "COMPLETED",
+            registerShift: { registerId },
+          },
+          select: {
+            id: true,
+            receiptNumber: true,
+            subtotalLaari: true,
+            totalLaari: true,
+            paymentMethod: true,
+            createdAt: true,
+            createdBy: { select: { name: true } },
+            items: {
+              orderBy: { id: "asc" },
+              select: {
+                id: true,
+                productName: true,
+                productSku: true,
+                quantity: true,
+                unitPriceLaari: true,
+                lineTotalLaari: true,
+              },
+            },
+          },
+        })
+      : Promise.resolve(null),
   ]);
 
   return {
@@ -767,6 +805,13 @@ export async function getRegisterManagementData(registerId: string) {
     shift,
     items,
     lastSale,
+    receipt: receipt
+      ? {
+          ...receipt,
+          receiptNumber: receipt.receiptNumber.toString(),
+          createdAt: receipt.createdAt.toISOString(),
+        }
+      : null,
     heldOrders: heldOrders.map((order) => ({
       ...order,
       items: order.items.flatMap((item) => {

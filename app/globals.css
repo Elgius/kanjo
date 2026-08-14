@@ -250,3 +250,30 @@
     animation: none;
   }
 }
+
+@media print {
+  @page {
+    size: 58mm auto;
+    margin: 3mm 5mm;
+  }
+
+  body * {
+    visibility: hidden !important;
+  }
+
+  .receipt-print-root,
+  .receipt-print-root * {
+    visibility: visible !important;
+  }
+
+  .receipt-print-root {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 48mm !important;
+    margin: 0;
+    color: #000 !important;
+    background: #fff !important;
+    print-color-adjust: exact;
+  }
+}

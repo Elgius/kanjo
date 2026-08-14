@@ -7,8 +7,7 @@ describe("POS form validation", () => {
     const form = new FormData();
     form.set("name", "  Coconut water  ");
     form.set("registerId", "register-id");
-    form.set("sku", " bev-001 ");
-    form.set("category", "Beverages");
+    form.set("categoryId", "category-id");
     form.set("retailPrice", "25.50");
     form.set("costPrice", "12");
     form.set("stockQuantity", "8");
@@ -18,7 +17,7 @@ describe("POS form validation", () => {
     const result = parseProductForm(form);
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.data.sku).toBe("BEV-001");
+      expect(result.data.categoryId).toBe("category-id");
       expect(result.data.retailPriceLaari).toBe(2550);
       expect(result.data.openingStock).toBe(8);
     }
@@ -28,8 +27,7 @@ describe("POS form validation", () => {
     const product = new FormData();
     product.set("name", "Item");
     product.set("registerId", "register-id");
-    product.set("sku", "SKU");
-    product.set("category", "Other");
+    product.set("categoryId", "category-id");
     product.set("retailPrice", "1");
     product.set("costPrice", "1");
     product.set("stockQuantity", "-1");
@@ -46,8 +44,7 @@ describe("POS form validation", () => {
     const consumable = new FormData();
     consumable.set("name", "Coffee beans");
     consumable.set("registerId", "register-id");
-    consumable.set("sku", "COF-001");
-    consumable.set("category", "Beverages");
+    consumable.set("categoryId", "category-id");
     consumable.set("retailPrice", "35");
     consumable.set("costPrice", "18");
     consumable.set("stockQuantity", "4");

@@ -8,6 +8,7 @@ import { getRegisterManagementData } from "@/lib/pos/queries";
 import { cn } from "@/lib/utils";
 import { openShiftAction } from "../actions";
 import { RegisterHeaderActions } from "./register-header-actions";
+import { ReceiptPrintDialog } from "./receipt-print-dialog";
 import { RegisterSaleWorkspace } from "./register-sale-workspace";
 
 function single(value: string | string[] | undefined) {
@@ -38,7 +39,7 @@ export default async function RegisterManagementPage({
   const canEdit = canAccess(authorization, "REGISTERS", "EDIT");
   const { registerId } = await params;
   const query = await searchParams;
-  const data = await getRegisterManagementData(registerId);
+  const data = await getRegisterManagementData(registerId, single(query.receipt));
   if (!data) notFound();
 
   const { register, shift, lastSale } = data;
@@ -51,6 +52,14 @@ export default async function RegisterManagementPage({
 
   return (
     <PageContainer className="gap-[22px] py-8 lg:py-[34px]">
+      {data.receipt ? (
+        <ReceiptPrintDialog
+          registerId={register.id}
+          registerName={register.name}
+          registerCode={register.code}
+          receipt={data.receipt}
+        />
+      ) : null}
       {success || error ? (
         <p
           role={error ? "alert" : "status"}

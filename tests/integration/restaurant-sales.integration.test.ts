@@ -6,7 +6,7 @@ databaseDescribe("restaurant recipe sale", () => {
   let db: PrismaClient;
   let recordSale: typeof import("@/lib/pos/sales").recordSale;
   const marker = `restaurant-test-${crypto.randomUUID()}`;
-  let userId = ""; let roleId = ""; let registerId = ""; let shiftId = ""; let coffeeId = ""; let eggId = ""; let menuItemId = "";
+  let userId = ""; let roleId = ""; let registerId = ""; let shiftId = ""; let coffeeId = ""; let eggId = ""; let menuItemId = ""; let categoryId = "";
 
   function day(offset: number) { const value = new Date(); value.setUTCDate(value.getUTCDate() + offset); return value; }
 
@@ -18,8 +18,9 @@ databaseDescribe("restaurant recipe sale", () => {
     const user = await db.user.create({ data: { id: marker, name: "Restaurant Test", email: `${marker}@example.invalid`, roleId } }); userId = user.id;
     const register = await db.cashRegister.create({ data: { code: marker.toUpperCase(), name: marker, purpose: "RESTAURANT" } }); registerId = register.id;
     shiftId = (await db.registerShift.create({ data: { registerId, openedById: userId } })).id;
-    const coffee = await db.product.create({ data: { registerId, sku: `${marker}-COF`, name: "Coffee beans", category: "Ingredients", retailPriceLaari: 0, kind: "CONSUMABLE", quantityMetric: "g", quantityValue: 1000, servingSize: 25 } }); coffeeId = coffee.id;
-    const eggs = await db.product.create({ data: { registerId, sku: `${marker}-EGG`, name: "Eggs", category: "Ingredients", retailPriceLaari: 0, kind: "GOODS" } }); eggId = eggs.id;
+    categoryId = (await db.productCategory.create({ data: { name: `Ingredients ${marker}`, normalizedName: `ingredients ${marker}` } })).id;
+    const coffee = await db.product.create({ data: { registerId, categoryId, sku: `${marker}-COF`, name: "Coffee beans", category: "Ingredients", retailPriceLaari: 0, kind: "CONSUMABLE", quantityMetric: "g", quantityValue: 1000, servingSize: 25 } }); coffeeId = coffee.id;
+    const eggs = await db.product.create({ data: { registerId, categoryId, sku: `${marker}-EGG`, name: "Eggs", category: "Ingredients", retailPriceLaari: 0, kind: "GOODS" } }); eggId = eggs.id;
     await db.inventoryBatch.createMany({ data: [
       { productId: coffeeId, registerId, receivedById: userId, receivedQuantity: 100, remainingQuantity: 100, expiryDate: day(-1) },
       { productId: coffeeId, registerId, receivedById: userId, receivedQuantity: 50, remainingQuantity: 50, expiryDate: null },
@@ -40,6 +41,7 @@ databaseDescribe("restaurant recipe sale", () => {
     await db.menuItem.deleteMany({ where: { registerId } });
     await db.inventoryBatch.deleteMany({ where: { registerId } });
     await db.product.deleteMany({ where: { registerId } });
+    await db.productCategory.deleteMany({ where: { id: categoryId } });
     await db.registerShift.deleteMany({ where: { registerId } });
     await db.cashRegister.deleteMany({ where: { id: registerId } });
     await db.user.deleteMany({ where: { id: userId } });

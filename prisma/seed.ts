@@ -59,8 +59,16 @@ async function main() {
     const registerId = registerByCode.get(registerCode);
     if (!registerId) throw new Error(`Missing register ${registerCode}`);
     await prisma.$transaction(async (tx) => {
+      const category = await tx.productCategory.upsert({
+        where: { normalizedName: productData.category.toLocaleLowerCase("en") },
+        update: {},
+        create: {
+          name: productData.category,
+          normalizedName: productData.category.toLocaleLowerCase("en"),
+        },
+      });
       const product = await tx.product.create({
-        data: { ...productData, registerId },
+        data: { ...productData, registerId, categoryId: category.id },
       });
       const measuredPerUnit = product.kind === "CONSUMABLE" ? Number(product.quantityValue) : 1;
       if (stockQuantity > 0) {

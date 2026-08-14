@@ -14,6 +14,8 @@ databaseDescribe("Neon Stock query and hybrid search", () => {
   let saleId = "";
   let goodsId = "";
   let consumableId = "";
+  let suppliesCategoryId = "";
+  let ingredientsCategoryId = "";
 
   beforeAll(async () => {
     process.env.NEON_DB = testDatabaseUrl;
@@ -40,12 +42,19 @@ databaseDescribe("Neon Stock query and hybrid search", () => {
         totalLaari: 500,
       },
     })).id;
+    suppliesCategoryId = (await db.productCategory.create({
+      data: { name: `Supplies ${marker}`, normalizedName: `supplies ${marker}` },
+    })).id;
+    ingredientsCategoryId = (await db.productCategory.create({
+      data: { name: `Ingredients ${marker}`, normalizedName: `ingredients ${marker}` },
+    })).id;
     goodsId = (await db.product.create({
       data: {
         registerId,
         sku: `${marker}-GOODS`,
         name: "Staple Goods",
         category: "Supplies",
+        categoryId: suppliesCategoryId,
         retailPriceLaari: 250,
         costPriceLaari: 100,
         lowStockThreshold: 5,
@@ -57,6 +66,7 @@ databaseDescribe("Neon Stock query and hybrid search", () => {
         sku: `${marker}-CONS`,
         name: "Coffee Concentrate",
         category: "Ingredients",
+        categoryId: ingredientsCategoryId,
         retailPriceLaari: 500,
         costPriceLaari: 200,
         lowStockThreshold: 1,
@@ -91,6 +101,7 @@ databaseDescribe("Neon Stock query and hybrid search", () => {
     await db.inventoryBatch.deleteMany({ where: { registerId } });
     await db.sale.deleteMany({ where: { id: saleId } });
     await db.product.deleteMany({ where: { registerId } });
+    await db.productCategory.deleteMany({ where: { id: { in: [suppliesCategoryId, ingredientsCategoryId] } } });
     await db.registerShift.deleteMany({ where: { id: shiftId } });
     await db.cashRegister.deleteMany({ where: { id: registerId } });
     await db.user.deleteMany({ where: { id: userId } });

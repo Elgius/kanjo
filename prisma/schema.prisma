@@ -153,6 +153,7 @@ enum RegisterPurpose {
 model Product {
   id                 String               @id @default(uuid()) @db.Uuid
   registerId         String               @db.Uuid
+  categoryId         String               @db.Uuid
   sku                String               @unique
   barcode            String?              @unique
   name               String
@@ -170,6 +171,7 @@ model Product {
   createdAt          DateTime             @default(now())
   updatedAt          DateTime             @updatedAt
   register           CashRegister         @relation(fields: [registerId], references: [id], onDelete: Restrict)
+  categoryRecord     ProductCategory      @relation(fields: [categoryId], references: [id], onDelete: Restrict)
   saleItems          SaleItem[]
   stockMovements     InventoryMovement[]
   batches            InventoryBatch[]
@@ -179,8 +181,21 @@ model Product {
   @@index([active, updatedAt(sort: Desc)])
   @@index([registerId, active, name])
   @@index([category])
+  @@index([categoryId])
   @@index([searchText(ops: raw("gin_trgm_ops"))], type: Gin, map: "products_search_text_trgm_idx")
   @@map("products")
+}
+
+model ProductCategory {
+  id             String    @id @default(uuid()) @db.Uuid
+  name           String
+  normalizedName String    @unique
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  products       Product[]
+
+  @@index([name])
+  @@map("product_categories")
 }
 
 model CashRegister {

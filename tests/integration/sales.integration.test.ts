@@ -11,6 +11,7 @@ databaseDescribe("Neon sale transaction", () => {
   let registerId: string;
   let shiftId: string;
   let productId: string;
+  let categoryId: string;
   const marker = `codex-test-${crypto.randomUUID()}`;
 
   beforeAll(async () => {
@@ -35,12 +36,16 @@ databaseDescribe("Neon sale transaction", () => {
       data: { registerId, openedById: userId, openingCashLaari: 10_000 },
     });
     shiftId = shift.id;
+    categoryId = (await db.productCategory.create({
+      data: { name: `Test ${marker}`, normalizedName: `test ${marker}` },
+    })).id;
     const product = await db.product.create({
       data: {
         sku: marker.toUpperCase(),
         registerId,
         name: "Integration product",
         category: "Test",
+        categoryId,
         retailPriceLaari: 2_500,
         costPriceLaari: 1_000,
         lowStockThreshold: 1,
@@ -61,6 +66,7 @@ databaseDescribe("Neon sale transaction", () => {
     await db.registerOrder.deleteMany({ where: { createdById: userId } });
     await db.inventoryBatch.deleteMany({ where: { productId } });
     await db.product.deleteMany({ where: { id: productId } });
+    await db.productCategory.deleteMany({ where: { id: categoryId } });
     await db.registerShift.deleteMany({ where: { registerId } });
     await db.cashRegister.deleteMany({ where: { id: registerId } });
     await db.user.deleteMany({ where: { id: userId } });

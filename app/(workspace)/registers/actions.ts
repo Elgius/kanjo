@@ -184,7 +184,7 @@ export async function recordSaleAction(shiftId: string, registerId: string, form
     registersRedirect("error", parsed.error, registerId);
   }
 
-  let receiptNumber: bigint;
+  let completedSale: { id: string; receiptNumber: bigint };
   try {
     const sale = await recordSale(prisma, {
       shiftId,
@@ -196,7 +196,7 @@ export async function recordSaleAction(shiftId: string, registerId: string, form
         request: await getAuditRequestContext(),
       },
     });
-    receiptNumber = sale.receiptNumber;
+    completedSale = { id: sale.id, receiptNumber: sale.receiptNumber };
   } catch (error) {
     const message = error instanceof PosError ? error.message : "The sale could not be recorded.";
     await auditFailure(authorization, "SALE_RECORD", message, { shiftId, registerId });
@@ -204,5 +204,9 @@ export async function recordSaleAction(shiftId: string, registerId: string, form
   }
 
   refreshRegisters(registerId);
-  registersRedirect("success", `Receipt #${receiptNumber} recorded.`, registerId);
+  const params = new URLSearchParams({
+    success: `Receipt #${completedSale.receiptNumber} recorded.`,
+    receipt: completedSale.id,
+  });
+  redirect(`/registers/${registerId}?${params.toString()}`);
 }

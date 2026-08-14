@@ -8,8 +8,9 @@ import { prisma } from "@/lib/db";
 import { getAuditRequestContext, safeWriteAudit, writeAudit } from "@/lib/audit";
 import { requireActionAccess, type AuthorizationContext } from "@/lib/authorization";
 import { maldivesDate, measured, measuredPerStockUnit } from "@/lib/pos/inventory";
+import { createProductWithGeneratedSku } from "@/lib/pos/products";
 import { assignBatchExpiry, PosError, receiveInventory, writeOffBatch } from "@/lib/pos/sales";
-import { parseBatchExpiry, parseBatchWriteOff, parseProductForm, parseReceiveStock } from "@/lib/pos/validation";
+import { parseBatchExpiry, parseBatchWriteOff, parseCategoryForm, parseProductForm, parseProductUpdateForm, parseReceiveStock } from "@/lib/pos/validation";
 
 function inventoryRedirect(kind: "success" | "error", message: string): never {
   redirect(`/inventory?${kind}=${encodeURIComponent(message)}`);
@@ -17,6 +18,14 @@ function inventoryRedirect(kind: "success" | "error", message: string): never {
 
 function actorLabel(authorization: AuthorizationContext) {
   return authorization.user.username ?? authorization.user.email;
+}
+
+function refreshInventory() {
+  revalidatePath("/inventory");
+  revalidatePath("/stock");
+  revalidatePath("/registers");
+  revalidatePath("/");
+  revalidatePath("/", "layout");
 }
 
 async function auditFailure(
@@ -66,8 +75,14 @@ export async function createProductAction(formData: FormData) {
 
   try {
     await prisma.$transaction(async (tx) => {
-      const { openingStock, expiryDate, ...productData } = parsed.data;
-      const product = await tx.product.create({ data: productData });
+      const { openingStock, expiryDate, categoryId, ...productData } = parsed.data;
+      const category = await tx.productCategory.findUnique({ where: { id: categoryId } });
+      if (!category) throw new PosError("Select an available category.");
+      const product = await createProductWithGeneratedSku(tx, {
+        ...productData,
+        categoryId: category.id,
+        category: category.name,
+      });
       if (openingStock > 0) {
         const quantity = measured(measuredPerStockUnit(product) * openingStock);
         await tx.inventoryBatch.create({ data: {
@@ -105,17 +120,145 @@ export async function createProductAction(formData: FormData) {
       });
     });
   } catch (error) {
-    const message = error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002"
-      ? "That SKU or barcode already exists."
-      : "The product could not be created.";
-    await auditFailure(authorization, "PRODUCT_CREATE", message, { sku: parsed.data.sku });
+    const message = error instanceof PosError
+      ? error.message
+      : error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002"
+        ? "That barcode already exists."
+        : "The product could not be created.";
+    await auditFailure(authorization, "PRODUCT_CREATE", message, { name: parsed.data.name });
     inventoryRedirect("error", message);
   }
 
-  revalidatePath("/inventory");
-  revalidatePath("/stock");
-  revalidatePath("/");
+  refreshInventory();
   inventoryRedirect("success", "Product added.");
+}
+
+export async function updateProductAction(productId: string, formData: FormData) {
+  const authorization = await requireActionAccess("INVENTORY", "PRODUCT_UPDATE");
+  const parsed = parseProductUpdateForm(formData);
+  if (!parsed.ok) {
+    await auditFailure(authorization, "PRODUCT_UPDATE", parsed.error, { productId });
+    inventoryRedirect("error", parsed.error);
+  }
+
+  try {
+    const request = await getAuditRequestContext();
+    await prisma.$transaction(async (tx) => {
+      const category = await tx.productCategory.findUnique({ where: { id: parsed.data.categoryId } });
+      if (!category) throw new PosError("Select an available category.");
+      const updated = await tx.product.updateMany({
+        where: { id: productId, active: true },
+        data: { ...parsed.data, category: category.name },
+      });
+      if (updated.count !== 1) throw new PosError("That inventory item is no longer available.");
+      await writeAudit(tx, {
+        outcome: "SUCCESS",
+        event: "PRODUCT_UPDATE",
+        page: "INVENTORY",
+        actorId: authorization.user.id,
+        actorLabel: actorLabel(authorization),
+        targetType: "product",
+        targetId: productId,
+        summary: `Product ${parsed.data.name} updated.`,
+        metadata: { categoryId: category.id, barcode: parsed.data.barcode },
+        request,
+      });
+    });
+  } catch (error) {
+    const message = error instanceof PosError
+      ? error.message
+      : error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002"
+        ? "That barcode already exists."
+        : "The product could not be updated.";
+    await auditFailure(authorization, "PRODUCT_UPDATE", message, { productId });
+    inventoryRedirect("error", message);
+  }
+
+  refreshInventory();
+  inventoryRedirect("success", "Product updated.");
+}
+
+export async function deleteProductAction(productId: string) {
+  const authorization = await requireActionAccess("INVENTORY", "PRODUCT_DELETE");
+  try {
+    const request = await getAuditRequestContext();
+    await prisma.$transaction(async (tx) => {
+      const product = await tx.product.findFirst({ where: { id: productId, active: true } });
+      if (!product) throw new PosError("That inventory item is no longer available.");
+      await tx.product.update({ where: { id: product.id }, data: { active: false } });
+      await writeAudit(tx, {
+        outcome: "SUCCESS",
+        event: "PRODUCT_DELETE",
+        page: "INVENTORY",
+        actorId: authorization.user.id,
+        actorLabel: actorLabel(authorization),
+        targetType: "product",
+        targetId: product.id,
+        summary: `Product ${product.name} removed from inventory.`,
+        metadata: { sku: product.sku },
+        request,
+      });
+    });
+  } catch (error) {
+    const message = error instanceof PosError ? error.message : "The product could not be removed.";
+    await auditFailure(authorization, "PRODUCT_DELETE", message, { productId });
+    inventoryRedirect("error", message);
+  }
+
+  refreshInventory();
+  inventoryRedirect("success", "Product removed.");
+}
+
+export async function createCategoryAction(formData: FormData) {
+  const authorization = await requireActionAccess("INVENTORY", "CATEGORY_CREATE");
+  const parsed = parseCategoryForm(formData);
+  if (!parsed.ok) inventoryRedirect("error", parsed.error);
+  try {
+    await prisma.productCategory.create({ data: parsed.data });
+  } catch (error) {
+    const message = error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002"
+      ? "That category already exists."
+      : "The category could not be created.";
+    await auditFailure(authorization, "CATEGORY_CREATE", message, parsed.data);
+    inventoryRedirect("error", message);
+  }
+  refreshInventory();
+  inventoryRedirect("success", "Category added.");
+}
+
+export async function updateCategoryAction(categoryId: string, formData: FormData) {
+  const authorization = await requireActionAccess("INVENTORY", "CATEGORY_UPDATE");
+  const parsed = parseCategoryForm(formData);
+  if (!parsed.ok) inventoryRedirect("error", parsed.error);
+  try {
+    await prisma.$transaction(async (tx) => {
+      const category = await tx.productCategory.update({ where: { id: categoryId }, data: parsed.data });
+      await tx.product.updateMany({ where: { categoryId }, data: { category: category.name } });
+    });
+  } catch (error) {
+    const message = error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002"
+      ? "That category already exists."
+      : "The category could not be updated.";
+    await auditFailure(authorization, "CATEGORY_UPDATE", message, { categoryId });
+    inventoryRedirect("error", message);
+  }
+  refreshInventory();
+  inventoryRedirect("success", "Category updated.");
+}
+
+export async function deleteCategoryAction(categoryId: string) {
+  const authorization = await requireActionAccess("INVENTORY", "CATEGORY_DELETE");
+  try {
+    const usage = await prisma.product.count({ where: { categoryId } });
+    if (usage) throw new PosError("Move or remove the products in this category first.");
+    await prisma.productCategory.delete({ where: { id: categoryId } });
+  } catch (error) {
+    const message = error instanceof PosError ? error.message : "The category could not be removed.";
+    await auditFailure(authorization, "CATEGORY_DELETE", message, { categoryId });
+    inventoryRedirect("error", message);
+  }
+  refreshInventory();
+  inventoryRedirect("success", "Category removed.");
 }
 
 export async function receiveStockAction(productId: string, formData: FormData) {
@@ -142,9 +285,7 @@ export async function receiveStockAction(productId: string, formData: FormData) 
     inventoryRedirect("error", message);
   }
 
-  revalidatePath("/inventory");
-  revalidatePath("/stock");
-  revalidatePath("/");
+  refreshInventory();
   inventoryRedirect("success", "Stock batch received.");
 }
 

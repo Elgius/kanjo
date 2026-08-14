@@ -18,8 +18,9 @@ function registerRedirect(
   registerId: string,
   kind: "success" | "error",
   message: string,
+  extra?: Record<string, string>,
 ): never {
-  const params = new URLSearchParams({ [kind]: message });
+  const params = new URLSearchParams({ [kind]: message, ...extra });
   redirect(`/registers/${registerId}?${params.toString()}`);
 }
 
@@ -62,6 +63,7 @@ export async function checkoutRegisterSaleAction(
     registerRedirect(registerId, "error", parsed.error);
   }
 
+  let completedSale: { id: string; receiptNumber: bigint };
   try {
     const sale = await recordSale(prisma, {
       shiftId,
@@ -74,13 +76,20 @@ export async function checkoutRegisterSaleAction(
         request: await getAuditRequestContext(),
       },
     });
-    refreshRegister(registerId);
-    registerRedirect(registerId, "success", `Receipt #${sale.receiptNumber} recorded.`);
+    completedSale = { id: sale.id, receiptNumber: sale.receiptNumber };
   } catch (error) {
     const message = error instanceof PosError ? error.message : "The sale could not be recorded.";
     await auditFailure(authorization, "SALE_RECORD", message, { shiftId, registerId });
     registerRedirect(registerId, "error", message);
   }
+
+  refreshRegister(registerId);
+  registerRedirect(
+    registerId,
+    "success",
+    `Receipt #${completedSale.receiptNumber} recorded.`,
+    { receipt: completedSale.id },
+  );
 }
 
 export async function holdRegisterOrderAction(
@@ -108,11 +117,12 @@ export async function holdRegisterOrderAction(
         request: await getAuditRequestContext(),
       },
     });
-    refreshRegister(registerId);
-    registerRedirect(registerId, "success", "Order held for this shift.");
   } catch (error) {
     const message = error instanceof PosError ? error.message : "The order could not be held.";
     await auditFailure(authorization, "REGISTER_ORDER_HOLD", message, { shiftId, registerId });
     registerRedirect(registerId, "error", message);
   }
+
+  refreshRegister(registerId);
+  registerRedirect(registerId, "success", "Order held for this shift.");
 }

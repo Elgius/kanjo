@@ -24,10 +24,9 @@ function positiveDecimal(value: string) {
 
 export type ProductInput = {
   registerId: string;
-  sku: string;
+  categoryId: string;
   barcode: string | null;
   name: string;
-  category: string;
   description: string | null;
   retailPriceLaari: number;
   costPriceLaari: number;
@@ -43,16 +42,15 @@ export type ProductInput = {
 export function parseProductForm(formData: FormData): ValidationResult<ProductInput> {
   const name = text(formData, "name");
   const registerId = text(formData, "registerId");
-  const sku = text(formData, "sku").toUpperCase();
-  const category = text(formData, "category");
+  const categoryId = text(formData, "categoryId");
   const retailPriceLaari = parseMvr(formData.get("retailPrice"));
   const costPriceLaari = parseMvr(formData.get("costPrice"));
   const openingStock = nonNegativeInteger(text(formData, "stockQuantity"));
   const lowStockThreshold = nonNegativeInteger(text(formData, "lowStockThreshold"));
   const kind = text(formData, "kind");
 
-  if (!name || !sku || !category || !registerId) {
-    return { ok: false, error: "Register, name, SKU, and category are required." };
+  if (!name || !categoryId || !registerId) {
+    return { ok: false, error: "Register, name, and category are required." };
   }
   if (retailPriceLaari === null || costPriceLaari === null) {
     return { ok: false, error: "Prices must be valid non-negative MVR amounts." };
@@ -89,8 +87,7 @@ export function parseProductForm(formData: FormData): ValidationResult<ProductIn
     data: {
       registerId,
       name,
-      sku,
-      category,
+      categoryId,
       barcode: text(formData, "barcode") || null,
       description: text(formData, "description") || null,
       retailPriceLaari,
@@ -104,6 +101,43 @@ export function parseProductForm(formData: FormData): ValidationResult<ProductIn
       servingSize,
     },
   };
+}
+
+export function parseProductUpdateForm(formData: FormData) {
+  const name = text(formData, "name");
+  const categoryId = text(formData, "categoryId");
+  const retailPriceLaari = parseMvr(formData.get("retailPrice"));
+  const costPriceLaari = parseMvr(formData.get("costPrice"));
+  const lowStockThreshold = nonNegativeInteger(text(formData, "lowStockThreshold"));
+
+  if (!name || !categoryId) {
+    return { ok: false, error: "Name and category are required." } as const;
+  }
+  if (retailPriceLaari === null || costPriceLaari === null) {
+    return { ok: false, error: "Prices must be valid non-negative MVR amounts." } as const;
+  }
+  if (lowStockThreshold === null) {
+    return { ok: false, error: "Low-stock threshold must be a non-negative whole number." } as const;
+  }
+
+  return {
+    ok: true,
+    data: {
+      name,
+      categoryId,
+      barcode: text(formData, "barcode") || null,
+      description: text(formData, "description") || null,
+      retailPriceLaari,
+      costPriceLaari,
+      lowStockThreshold,
+    },
+  } as const;
+}
+
+export function parseCategoryForm(formData: FormData) {
+  const name = text(formData, "name").replace(/\s+/g, " ").slice(0, 80);
+  if (!name) return { ok: false, error: "Category name is required." } as const;
+  return { ok: true, data: { name, normalizedName: name.toLocaleLowerCase("en") } } as const;
 }
 
 export function parseStockAdjustment(formData: FormData) {

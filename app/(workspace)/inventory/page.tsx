@@ -16,7 +16,7 @@ import { getInventoryData, type InventoryFilters } from "@/lib/pos/queries";
 import { cn } from "@/lib/utils";
 import { canAccess, requirePageAccess } from "@/lib/authorization";
 import { assignBatchExpiryAction, receiveStockAction, writeOffBatchAction } from "./actions";
-import { NewProductMenu } from "./product-form";
+import { CategoryManager, InventoryItemActions, NewProductMenu } from "./product-form";
 
 const fieldClass =
   "h-10 rounded-lg border border-border bg-card px-3 text-xs outline-none focus:border-ring focus:ring-2 focus:ring-ring/15";
@@ -66,7 +66,7 @@ export default async function InventoryPage({ searchParams }: PageProps<"/invent
         eyebrow="Catalogue"
         title="Inventory"
         description="Manage products, pricing, and stock from one live catalogue."
-        actions={canEdit ? <NewProductMenu registers={data.registers} /> : null}
+        actions={canEdit ? <div className="flex gap-2"><CategoryManager categories={data.categories} /><NewProductMenu registers={data.registers} categories={data.categories} /></div> : null}
       />
 
       {success || error ? (
@@ -90,7 +90,7 @@ export default async function InventoryPage({ searchParams }: PageProps<"/invent
         </label>
         <select name="category" aria-label="Category" defaultValue={filters.category ?? "all"} className={`${fieldClass} h-11 xl:w-[170px]`}>
           <option value="all">All categories</option>
-          {data.categories.map((category) => <option key={category} value={category}>{category}</option>)}
+          {data.categories.map((category) => <option key={category.id} value={category.name}>{category.name}</option>)}
         </select>
         <select name="register" aria-label="Register" defaultValue={filters.register ?? "all"} className={`${fieldClass} h-11 xl:w-[170px]`}>
           <option value="all">All registers</option>
@@ -115,7 +115,7 @@ export default async function InventoryPage({ searchParams }: PageProps<"/invent
               <TableHead className="h-12 w-[120px] p-0 text-[10px] font-normal text-muted-foreground">TYPE</TableHead>
               <TableHead className="h-12 w-[110px] p-0 text-[10px] font-normal text-muted-foreground">ON HAND</TableHead>
               <TableHead className="h-12 w-[130px] p-0 text-[10px] font-normal text-muted-foreground">RETAIL</TableHead>
-              <TableHead className="h-12 p-0 text-right text-[10px] font-normal text-muted-foreground">ADJUST</TableHead>
+              <TableHead className="h-12 p-0 text-right text-[10px] font-normal text-muted-foreground">ACTIONS</TableHead>
             </TableRow></TableHeader>
             <TableBody>
               {data.products.map((product) => {
@@ -131,7 +131,7 @@ export default async function InventoryPage({ searchParams }: PageProps<"/invent
                     </TableCell>
                     <TableCell className="p-0 font-mono">{formatMvr(product.retailPriceLaari)}</TableCell>
                     <TableCell className="p-0 text-right">
-                      {canEdit ? <details className="relative inline-block text-left"><summary className="cursor-pointer list-none rounded-md border border-border px-3 py-2 text-[11px] hover:bg-accent">Receive stock</summary><form action={receiveStockAction.bind(null, product.id)} className="absolute right-0 z-20 mt-2 grid w-64 gap-2 rounded-xl border border-border bg-card p-4 text-left shadow-xl"><strong className="text-xs">Receive {product.name}</strong><label className="grid gap-1 text-[10px]">STOCK ITEMS<input name="stockUnits" type="number" min="1" step="1" required className={fieldClass} /></label><label className="grid gap-1 text-[10px]">EXPIRY {product.register.purpose === "RESTAURANT" ? "(REQUIRED)" : "(OPTIONAL)"}<input name="expiryDate" type="date" required={product.register.purpose === "RESTAURANT"} className={fieldClass} /></label><input type="hidden" name="reason" value="Stock received" /><button className="h-9 rounded-lg bg-primary text-xs font-semibold text-primary-foreground">Add batch</button></form></details> : <span className="text-[10px] text-muted-foreground">View only</span>}
+                      {canEdit ? <div className="flex justify-end gap-2"><InventoryItemActions product={{ id: product.id, sku: product.sku, barcode: product.barcode, name: product.name, categoryId: product.categoryId, description: product.description, retailPriceLaari: product.retailPriceLaari, costPriceLaari: product.costPriceLaari, lowStockThreshold: product.lowStockThreshold, kind: product.kind, registerName: product.register.name }} categories={data.categories} /><details className="relative inline-block text-left"><summary className="cursor-pointer list-none rounded-md border border-border px-3 py-2 text-[11px] hover:bg-accent">Receive stock</summary><form action={receiveStockAction.bind(null, product.id)} className="absolute right-0 z-20 mt-2 grid w-64 gap-2 rounded-xl border border-border bg-card p-4 text-left shadow-xl"><strong className="text-xs">Receive {product.name}</strong><label className="grid gap-1 text-[10px]">STOCK ITEMS<input name="stockUnits" type="number" min="1" step="1" required className={fieldClass} /></label><label className="grid gap-1 text-[10px]">EXPIRY {product.register.purpose === "RESTAURANT" ? "(REQUIRED)" : "(OPTIONAL)"}<input name="expiryDate" type="date" required={product.register.purpose === "RESTAURANT"} className={fieldClass} /></label><input type="hidden" name="reason" value="Stock received" /><button className="h-9 rounded-lg bg-primary text-xs font-semibold text-primary-foreground">Add batch</button></form></details></div> : <span className="text-[10px] text-muted-foreground">View only</span>}
                     </TableCell>
                   </TableRow>
                 );
