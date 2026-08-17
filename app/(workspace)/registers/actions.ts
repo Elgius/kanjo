@@ -25,7 +25,10 @@ function registersRedirect(kind: "success" | "error", message: string, registerI
 
 function refreshRegisters(registerId?: string) {
   revalidatePath("/registers");
-  if (registerId) revalidatePath(`/registers/${registerId}`);
+  if (registerId) {
+    revalidatePath(`/registers/${registerId}`);
+    revalidatePath(`/registers/${registerId}/restaurant`);
+  }
   revalidatePath("/inventory");
   revalidatePath("/stock");
   revalidatePath("/bill-history");
@@ -144,6 +147,14 @@ export async function closeShiftAction(shiftId: string, registerId: string, form
   try {
     const request = await getAuditRequestContext();
     await prisma.$transaction(async (tx) => {
+      const heldOrderCount = await tx.registerOrder.count({
+        where: { registerShiftId: shiftId, status: "HELD" },
+      });
+      if (heldOrderCount > 0) {
+        throw new PosError(
+          `Complete or cancel ${heldOrderCount} held ${heldOrderCount === 1 ? "bill" : "bills"} before closing this shift.`,
+        );
+      }
       const updated = await tx.registerShift.updateMany({
         where: { id: shiftId, registerId, status: "OPEN" },
         data: {

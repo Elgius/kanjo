@@ -164,6 +164,65 @@ export function parseRegisterForm(formData: FormData) {
   return { ok: true, data: { name, purpose } } as const;
 }
 
+export function parseRegisterEditForm(formData: FormData) {
+  const parsed = parseRegisterForm(formData);
+  if (!parsed.ok) return parsed;
+  const status = text(formData, "status");
+  if (status !== "ACTIVE" && status !== "ARCHIVED") {
+    return { ok: false, error: "Select whether this register is active or archived." } as const;
+  }
+  return {
+    ok: true,
+    data: { ...parsed.data, active: status === "ACTIVE" },
+  } as const;
+}
+
+export function parseRestaurantTableForm(formData: FormData) {
+  const name = text(formData, "name").replace(/\s+/g, " ").slice(0, 60);
+  const seats = nonNegativeInteger(text(formData, "seats"));
+  if (!name) {
+    return { ok: false, error: "Table name is required." } as const;
+  }
+  if (seats === null || seats < 1 || seats > 100) {
+    return { ok: false, error: "Seats must be a whole number between 1 and 100." } as const;
+  }
+  return { ok: true, data: { name, seats } } as const;
+}
+
+export function parseCustomerForm(formData: FormData) {
+  const name = text(formData, "name").replace(/\s+/g, " ").slice(0, 100);
+  const email = text(formData, "email").slice(0, 254) || null;
+  const address = text(formData, "address").replace(/\s+/g, " ").slice(0, 500) || null;
+  const phoneNumber = text(formData, "phoneNumber").replace(/\s+/g, " ").slice(0, 40) || null;
+  const nationality = text(formData, "nationality").replace(/\s+/g, " ").slice(0, 80);
+  const creditLimitLaari = parseMvr(formData.get("creditLimit"));
+
+  if (!name || !nationality) {
+    return { ok: false, error: "Name and nationality are required." } as const;
+  }
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return { ok: false, error: "Enter a valid email address." } as const;
+  }
+  if (creditLimitLaari === null) {
+    return { ok: false, error: "Credit limit must be a valid non-negative MVR amount." } as const;
+  }
+  return {
+    ok: true,
+    data: { name, email, address, phoneNumber, nationality, creditLimitLaari },
+  } as const;
+}
+
+export function parseCreditSettlementForm(formData: FormData) {
+  const paymentMethod = text(formData, "paymentMethod");
+  if (!(["CASH", "CARD", "MOBILE"] as const).includes(paymentMethod as "CASH" | "CARD" | "MOBILE")) {
+    return { ok: false, error: "Select cash, card, or mobile pay." } as const;
+  }
+  return {
+    ok: true,
+    data: { paymentMethod: paymentMethod as "CASH" | "CARD" | "MOBILE" },
+  } as const;
+}
+
 export function parseOpeningCash(formData: FormData) {
   const openingCashLaari = parseMvr(formData.get("openingCash"));
   if (openingCashLaari === null) {
@@ -244,6 +303,7 @@ export function parseRegisterCartForm(formData: FormData) {
     data: {
       items,
       heldOrderId,
+      restaurantTableId: text(formData, "restaurantTableId") || null,
       customerNote: text(formData, "customerNote").slice(0, 500) || null,
       paymentMethod: paymentMethod as "CASH" | "CARD" | "MOBILE",
     },
@@ -279,11 +339,13 @@ export function parseMenuItemForm(formData: FormData) {
   const category = text(formData, "category");
   const retailPriceLaari = parseMvr(formData.get("retailPrice"));
   const productIds = formData.getAll("ingredientProductId").filter((value): value is string => typeof value === "string" && Boolean(value));
+  const standaloneProductIds = new Set(formData.getAll("standaloneProductId").filter((value): value is string => typeof value === "string" && Boolean(value)));
   const multipliers = formData.getAll("servingMultiplier").map((value) => typeof value === "string" ? Number(value) : NaN);
   if (!name || !category) return { ok: false, error: "Menu item name and category are required." } as const;
   if (retailPriceLaari === null) return { ok: false, error: "Enter a valid non-negative menu price." } as const;
   if (!productIds.length || productIds.length !== multipliers.length) return { ok: false, error: "Add at least one recipe ingredient." } as const;
   if (new Set(productIds).size !== productIds.length) return { ok: false, error: "Each ingredient may appear only once." } as const;
+  if ([...standaloneProductIds].some((productId) => !productIds.includes(productId))) return { ok: false, error: "A standalone item must also be a recipe ingredient." } as const;
   if (multipliers.some((value) => !Number.isSafeInteger(value) || value < 1)) return { ok: false, error: "Serving multiples must be positive whole numbers." } as const;
-  return { ok: true, data: { name, category, retailPriceLaari, ingredients: productIds.map((productId, index) => ({ productId, servingMultiplier: multipliers[index] })) } } as const;
+  return { ok: true, data: { name, category, retailPriceLaari, ingredients: productIds.map((productId, index) => ({ productId, servingMultiplier: multipliers[index], standalone: standaloneProductIds.has(productId) })) } } as const;
 }

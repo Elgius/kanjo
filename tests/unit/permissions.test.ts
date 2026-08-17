@@ -44,9 +44,9 @@ describe("role permissions", () => {
     expect(parsePermissionValue("VIEW", false)).toBe("VIEW");
   });
 
-  test("only registers and inventory expose edit capability", () => {
+  test("only operational write pages expose edit capability", () => {
     expect(JSON.stringify(PAGE_DEFINITIONS.filter((page) => page.editable).map((page) => page.key))).toBe(
-      JSON.stringify(["REGISTERS", "INVENTORY"]),
+      JSON.stringify(["REGISTERS", "INVENTORY", "CUSTOMERS"]),
     );
   });
 });

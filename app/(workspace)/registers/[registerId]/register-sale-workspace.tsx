@@ -1,12 +1,13 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Minus, Plus, Search } from "lucide-react";
+import Link from "next/link";
 import { useFormStatus } from "react-dom";
 
 import { formatMvr } from "@/lib/pos/money";
 import { cn } from "@/lib/utils";
-import { checkoutRegisterSaleAction, holdRegisterOrderAction } from "./actions";
+import { cancelHeldOrderAction, checkoutRegisterSaleAction, creditRegisterBillAction, holdRegisterOrderAction } from "./actions";
 
 type SellableItem = {
   id: string;
@@ -22,9 +23,26 @@ type HeldOrder = {
   id: string;
   customerNote: string | null;
   paymentMethod: "CASH" | "CARD" | "MOBILE" | null;
+  restaurantTableId: string | null;
+  restaurantTable: { name: string } | null;
   totalLaari: number;
   heldAt: string;
   items: Array<{ itemId: string; quantity: number }>;
+};
+
+type RestaurantTable = {
+  id: string;
+  name: string;
+  seats: number;
+  occupiedOrderId: string | null;
+};
+
+type CreditCustomer = {
+  id: string;
+  name: string;
+  creditLimitLaari: number;
+  outstandingLaari: number;
+  availableCreditLaari: number;
 };
 
 type PaymentMethod = "CASH" | "CARD" | "MOBILE";
@@ -32,26 +50,36 @@ type PaymentMethod = "CASH" | "CARD" | "MOBILE";
 function SubmitButtons({
   canEdit,
   totalLaari,
-  holdAction,
+  physicalHoldAction,
+  creditHoldAction,
+  holdReady,
+  creditCustomers,
   paymentMethod,
 }: {
   canEdit: boolean;
   totalLaari: number;
-  holdAction: (formData: FormData) => void;
+  physicalHoldAction: (formData: FormData) => void;
+  creditHoldAction: (formData: FormData) => void;
+  holdReady: boolean;
+  creditCustomers: CreditCustomer[];
   paymentMethod: PaymentMethod;
 }) {
   const { pending } = useFormStatus();
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const [customerId, setCustomerId] = useState("");
   const paymentLabel = paymentMethod === "MOBILE" ? "mobile pay" : paymentMethod.toLowerCase();
+  const selectedCustomer = creditCustomers.find((customer) => customer.id === customerId);
+  const creditReady = Boolean(selectedCustomer && selectedCustomer.availableCreditLaari >= totalLaari);
 
   return (
     <div className="grid h-[52px] grid-cols-[98px_minmax(0,1fr)] gap-2">
       <button
-        type="submit"
-        formAction={holdAction}
+        type="button"
+        onClick={() => dialogRef.current?.showModal()}
         disabled={!canEdit || pending || totalLaari === 0}
         className="rounded-[9px] border border-border text-[11px] font-semibold disabled:opacity-45"
       >
-        Hold order
+        Hold
       </button>
       <button
         type="submit"
@@ -61,6 +89,25 @@ function SubmitButtons({
         <span>{pending ? "Processing…" : `Charge ${paymentLabel}`}</span>
         <span className="font-mono text-[13px]">{formatMvr(totalLaari)} →</span>
       </button>
+
+      <dialog ref={dialogRef} className="m-auto w-[min(520px,calc(100%-32px))] rounded-xl border border-border bg-card p-0 text-foreground shadow-xl backdrop:bg-black/35">
+        <div className="grid gap-4 p-5 sm:p-6">
+          <header><p className="text-xs text-muted-foreground">Pause this bill</p><h2 className="mt-1 font-serif text-2xl font-semibold">How should it be held?</h2></header>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <section className="flex flex-col justify-between gap-5 rounded-xl border border-border p-4">
+              <div><h3 className="text-sm font-semibold">Physical</h3><p className="mt-1 text-[11px] leading-5 text-muted-foreground">Keep the bill as a tab. Stock is deducted only when the customer returns and pays.</p></div>
+              <button type="submit" formAction={physicalHoldAction} disabled={pending || !holdReady} className="h-10 rounded-lg bg-primary px-4 text-xs font-semibold text-primary-foreground disabled:opacity-45">Hold as tab</button>
+              {!holdReady ? <p className="text-[10px] text-chart-1">Select a restaurant table first.</p> : null}
+            </section>
+            <section className="flex flex-col justify-between gap-4 rounded-xl border border-chart-1/40 bg-chart-1/5 p-4">
+              <div><h3 className="text-sm font-semibold">Customer credit</h3><p className="mt-1 text-[11px] leading-5 text-muted-foreground">Deduct stock now and send the unpaid bill to a customer account.</p></div>
+              {creditCustomers.length ? <label className="grid gap-1.5 text-[9px] text-muted-foreground">CUSTOMER<select name="customerId" value={customerId} onChange={(event) => setCustomerId(event.target.value)} className="h-10 min-w-0 rounded-lg border border-border bg-background px-3 text-xs text-foreground"><option value="">Select customer</option>{creditCustomers.map((customer) => <option key={customer.id} value={customer.id} disabled={customer.availableCreditLaari < totalLaari}>{customer.name} · {formatMvr(customer.availableCreditLaari)} available{customer.availableCreditLaari < totalLaari ? " · Limit exceeded" : ""}</option>)}</select></label> : <Link href="/customers" className="flex h-10 items-center justify-center rounded-lg border border-border px-3 text-[11px] font-semibold">Create a customer first</Link>}
+              <button type="submit" formAction={creditHoldAction} disabled={pending || !creditReady} className="h-10 rounded-lg bg-chart-1 px-4 text-xs font-semibold text-white disabled:opacity-45">Use customer credit</button>
+            </section>
+          </div>
+          <button type="button" onClick={() => dialogRef.current?.close()} className="h-9 justify-self-end rounded-lg border border-border px-3 text-[11px] font-semibold">Cancel</button>
+        </div>
+      </dialog>
     </div>
   );
 }
@@ -69,6 +116,9 @@ export function RegisterSaleWorkspace({
   registerId,
   shiftId,
   items,
+  isRestaurant,
+  restaurantTables,
+  creditCustomers,
   heldOrders,
   canEdit,
   initialHeldOrderId,
@@ -76,6 +126,9 @@ export function RegisterSaleWorkspace({
   registerId: string;
   shiftId: string;
   items: SellableItem[];
+  isRestaurant: boolean;
+  restaurantTables: RestaurantTable[];
+  creditCustomers: CreditCustomer[];
   heldOrders: HeldOrder[];
   canEdit: boolean;
   initialHeldOrderId?: string;
@@ -85,12 +138,16 @@ export function RegisterSaleWorkspace({
   const [category, setCategory] = useState("all");
   const [heldOrderId, setHeldOrderId] = useState(initialOrder?.id ?? "");
   const [customerNote, setCustomerNote] = useState(initialOrder?.customerNote ?? "");
+  const [restaurantTableId, setRestaurantTableId] = useState(
+    initialOrder?.restaurantTableId ?? "",
+  );
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(
     initialOrder?.paymentMethod ?? "CASH",
   );
   const [cart, setCart] = useState<Record<string, number>>(() =>
     Object.fromEntries(initialOrder?.items.map((item) => [item.itemId, item.quantity]) ?? []),
   );
+  const activeHeldOrder = heldOrders.find((order) => order.id === heldOrderId);
 
   const categories = useMemo(() => {
     const counts = new Map<string, number>();
@@ -138,19 +195,34 @@ export function RegisterSaleWorkspace({
     if (!order) {
       setCart({});
       setCustomerNote("");
+      setRestaurantTableId("");
       setPaymentMethod("CASH");
       return;
     }
     setCart(Object.fromEntries(order.items.map((item) => [item.itemId, item.quantity])));
     setCustomerNote(order.customerNote ?? "");
+    setRestaurantTableId(order.restaurantTableId ?? "");
     setPaymentMethod(order.paymentMethod ?? "CASH");
   }
 
   const checkoutAction = checkoutRegisterSaleAction.bind(null, shiftId, registerId);
   const holdAction = holdRegisterOrderAction.bind(null, shiftId, registerId);
+  const creditHoldAction = creditRegisterBillAction.bind(null, shiftId, registerId);
+  const cancelAction = cancelHeldOrderAction.bind(null, shiftId, registerId, heldOrderId);
 
   return (
-    <section className="grid min-h-[606px] gap-3.5 xl:grid-cols-[minmax(0,720px)_minmax(340px,394px)]">
+    <div className="grid gap-3.5">
+      {heldOrders.length ? (
+        <nav aria-label="Physically held bills" className="flex max-w-full items-center gap-2 overflow-x-auto rounded-xl border border-border bg-card p-2">
+          <button type="button" onClick={() => loadHeldOrder("")} className={cn("h-9 shrink-0 rounded-lg px-3 text-[11px] font-semibold", !heldOrderId ? "bg-primary text-primary-foreground" : "border border-border")}>New bill</button>
+          {heldOrders.map((order) => (
+            <button key={order.id} type="button" onClick={() => loadHeldOrder(order.id)} className={cn("h-9 shrink-0 rounded-lg px-3 text-[11px] font-semibold", heldOrderId === order.id ? "bg-primary text-primary-foreground" : "border border-border")}>
+              {order.restaurantTable?.name ? `${order.restaurantTable.name} · ` : "Tab · "}{formatMvr(order.totalLaari)}
+            </button>
+          ))}
+        </nav>
+      ) : null}
+      <section className="grid min-h-[606px] gap-3.5 xl:grid-cols-[minmax(0,720px)_minmax(340px,394px)]">
       <div className="flex min-w-0 flex-col gap-4 rounded-xl border border-border bg-card p-[18px]">
         <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
           <div className="flex flex-col gap-[3px]">
@@ -254,39 +326,36 @@ export function RegisterSaleWorkspace({
         <input type="hidden" name="items" value={serializedItems} />
         <input type="hidden" name="paymentMethod" value={paymentMethod} />
         <input type="hidden" name="heldOrderId" value={heldOrderId} />
+        <input type="hidden" name="restaurantTableId" value={restaurantTableId} />
 
         <div className="flex min-h-[72px] items-center justify-between gap-3 border-b border-border px-[18px] py-3">
           <div className="min-w-0">
             <h2 className="text-[15px] font-bold leading-[19px]">Current order</h2>
-            {heldOrders.length ? (
-              <label className="mt-1 flex items-center gap-1 font-mono text-[10px] leading-[13px] text-muted-foreground">
-                <span className="sr-only">Load held order</span>
-                <select
-                  value={heldOrderId}
-                  onChange={(event) => loadHeldOrder(event.target.value)}
-                  className="max-w-[180px] bg-transparent outline-none"
-                >
-                  <option value="">NEW ORDER</option>
-                  {heldOrders.map((order) => (
-                    <option key={order.id} value={order.id}>
-                      HELD · {formatMvr(order.totalLaari)} · {order.id.slice(0, 6).toUpperCase()}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ) : (
-              <p className="mt-1 font-mono text-[10px] leading-[13px] text-muted-foreground">
-                NEW ORDER
-              </p>
-            )}
+            <p className="mt-1 font-mono text-[10px] leading-[13px] text-muted-foreground">{activeHeldOrder ? `HELD TAB · ${activeHeldOrder.id.slice(0, 6).toUpperCase()}` : "NEW ORDER"}</p>
           </div>
-          <button
-            type="button"
-            onClick={() => loadHeldOrder("")}
-            className="h-[30px] rounded-[7px] border border-border px-2.5 text-[10px] text-muted-foreground"
-          >
-            Clear
-          </button>
+          <div className="flex items-center gap-2">
+            {heldOrderId ? (
+              <button
+                type="submit"
+                formAction={cancelAction}
+                onClick={(event) => {
+                  if (!window.confirm("Cancel this held bill and release its table?")) {
+                    event.preventDefault();
+                  }
+                }}
+                className="h-[30px] rounded-[7px] border border-destructive/30 px-2.5 text-[10px] text-destructive"
+              >
+                Cancel bill
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => loadHeldOrder("")}
+              className="h-[30px] rounded-[7px] border border-border px-2.5 text-[10px] text-muted-foreground"
+            >
+              Clear
+            </button>
+          </div>
         </div>
 
         <div className="flex min-h-[246px] flex-1 flex-col overflow-y-auto px-[18px] pt-2">
@@ -383,10 +452,41 @@ export function RegisterSaleWorkspace({
               </button>
             ))}
           </div>
+          {isRestaurant ? (
+            restaurantTables.length ? (
+              <label className="grid gap-1.5 text-[10px] tracking-[0.08em] text-muted-foreground">
+                TABLE FOR HELD BILL
+                <select
+                  value={restaurantTableId}
+                  onChange={(event) => setRestaurantTableId(event.target.value)}
+                  className="h-10 min-w-0 rounded-lg border border-border bg-background px-3 text-xs text-foreground outline-none"
+                >
+                  <option value="">Select a table</option>
+                  {restaurantTables.map((table) => {
+                    const occupiedByAnother = Boolean(
+                      table.occupiedOrderId && table.occupiedOrderId !== heldOrderId,
+                    );
+                    return (
+                      <option key={table.id} value={table.id} disabled={occupiedByAnother}>
+                        {table.name} · {table.seats} {table.seats === 1 ? "seat" : "seats"}{occupiedByAnother ? " · Occupied" : ""}
+                      </option>
+                    );
+                  })}
+                </select>
+              </label>
+            ) : (
+              <Link href={`/registers/${registerId}/restaurant`} className="flex h-10 items-center justify-center rounded-lg border border-chart-1/40 bg-chart-1/10 px-3 text-[11px] font-semibold text-chart-1">
+                Set up restaurant tables before holding a bill
+              </Link>
+            )
+          ) : null}
           <SubmitButtons
             canEdit={canEdit}
             totalLaari={totalLaari}
-            holdAction={holdAction}
+            physicalHoldAction={holdAction}
+            creditHoldAction={creditHoldAction}
+            holdReady={!isRestaurant || Boolean(restaurantTableId)}
+            creditCustomers={creditCustomers}
             paymentMethod={paymentMethod}
           />
           {!canEdit ? (
@@ -394,6 +494,7 @@ export function RegisterSaleWorkspace({
           ) : null}
         </div>
       </form>
-    </section>
+      </section>
+    </div>
   );
 }

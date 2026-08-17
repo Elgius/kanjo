@@ -232,8 +232,11 @@ export async function updateCategoryAction(categoryId: string, formData: FormDat
   if (!parsed.ok) inventoryRedirect("error", parsed.error);
   try {
     await prisma.$transaction(async (tx) => {
+      const previous = await tx.productCategory.findUnique({ where: { id: categoryId }, select: { name: true } });
+      if (!previous) throw new PosError("Category not found.");
       const category = await tx.productCategory.update({ where: { id: categoryId }, data: parsed.data });
       await tx.product.updateMany({ where: { categoryId }, data: { category: category.name } });
+      await tx.menuItem.updateMany({ where: { category: previous.name }, data: { category: category.name } });
     });
   } catch (error) {
     const message = error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002"
@@ -249,8 +252,13 @@ export async function updateCategoryAction(categoryId: string, formData: FormDat
 export async function deleteCategoryAction(categoryId: string) {
   const authorization = await requireActionAccess("INVENTORY", "CATEGORY_DELETE");
   try {
-    const usage = await prisma.product.count({ where: { categoryId } });
-    if (usage) throw new PosError("Move or remove the products in this category first.");
+    const category = await prisma.productCategory.findUnique({ where: { id: categoryId }, select: { name: true } });
+    if (!category) throw new PosError("Category not found.");
+    const [productUsage, menuUsage] = await Promise.all([
+      prisma.product.count({ where: { categoryId } }),
+      prisma.menuItem.count({ where: { category: category.name } }),
+    ]);
+    if (productUsage || menuUsage) throw new PosError("Move or remove the products and menu items in this category first.");
     await prisma.productCategory.delete({ where: { id: categoryId } });
   } catch (error) {
     const message = error instanceof PosError ? error.message : "The category could not be removed.";

@@ -7,12 +7,16 @@ import {
   Boxes,
   ChartNoAxesCombined,
   ChevronDown,
+  Clock3,
   LayoutDashboard,
+  ListChecks,
   LogOut,
   Package,
+  PencilLine,
   ReceiptText,
   Settings,
   Store,
+  UsersRound,
 } from "lucide-react";
 
 import { authClient } from "@/lib/auth-client";
@@ -36,6 +40,9 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
   SidebarRail,
   SidebarTrigger,
 } from "@/components/ui/sidebar";
@@ -47,6 +54,7 @@ const navigation = [
   { page: "STOCK", href: "/stock", label: "Stock", icon: Boxes },
   { page: "REPORTING", href: "/reporting", label: "Reporting", icon: ChartNoAxesCombined },
   { page: "BILL_HISTORY", href: "/bill-history", label: "Bill history", icon: ReceiptText },
+  { page: "CUSTOMERS", href: "/customers", label: "Customers", icon: UsersRound },
   { page: "SETTINGS", href: "/settings", label: "Settings", icon: Settings },
 ] as const;
 
@@ -79,6 +87,7 @@ function Brand({ compact = false, homeHref = "/" }: { compact?: boolean; homeHre
 
 function Navigation({ allowedPages }: { allowedPages: PageKey[] }) {
   const pathname = usePathname();
+  const [registersOpen, setRegistersOpen] = useState(true);
   const visibleNavigation = navigation
     .filter((item) =>
       allowedPages.includes(item.page) ||
@@ -95,6 +104,65 @@ function Navigation({ allowedPages }: { allowedPages: PageKey[] }) {
       <SidebarMenu className="gap-1.5">
         {visibleNavigation.map(({ href, label, icon: Icon }) => {
           const active = href === "/" ? pathname === "/" : pathname.startsWith(href);
+
+          if (href === "/registers") {
+            const sessionsActive = pathname.startsWith("/registers/sessions");
+            const editActive = pathname.startsWith("/registers/edit");
+            const selectionActive = active && !sessionsActive && !editActive;
+
+            return (
+              <SidebarMenuItem key={href}>
+                <SidebarMenuButton
+                  type="button"
+                  onClick={() => setRegistersOpen((open) => !open)}
+                  aria-expanded={registersOpen}
+                  tooltip={label}
+                  className="h-10 gap-3 rounded-lg px-3 text-[13px] font-medium group-data-[collapsible=icon]:size-10!"
+                >
+                  <Icon className="size-[17px]!" aria-hidden="true" />
+                  <span>{label}</span>
+                  <ChevronDown
+                    className={`ml-auto size-3.5 transition-transform group-data-[collapsible=icon]:hidden ${registersOpen ? "rotate-0" : "-rotate-90"}`}
+                    aria-hidden="true"
+                  />
+                </SidebarMenuButton>
+                {registersOpen ? (
+                  <SidebarMenuSub className="pb-1 pt-1">
+                    <SidebarMenuSubItem>
+                      <SidebarMenuSubButton
+                        render={<Link href="/registers" prefetch={false} />}
+                        isActive={selectionActive}
+                        className="h-8 rounded-lg text-[12px] data-active:bg-sidebar-primary data-active:text-sidebar-primary-foreground"
+                      >
+                        <ListChecks aria-hidden="true" />
+                        <span>Register selection</span>
+                      </SidebarMenuSubButton>
+                    </SidebarMenuSubItem>
+                    <SidebarMenuSubItem>
+                      <SidebarMenuSubButton
+                        render={<Link href="/registers/sessions" prefetch={false} />}
+                        isActive={sessionsActive}
+                        className="h-8 rounded-lg text-[12px] data-active:bg-sidebar-primary data-active:text-sidebar-primary-foreground"
+                      >
+                        <Clock3 aria-hidden="true" />
+                        <span>Sessions</span>
+                      </SidebarMenuSubButton>
+                    </SidebarMenuSubItem>
+                    <SidebarMenuSubItem>
+                      <SidebarMenuSubButton
+                        render={<Link href="/registers/edit" prefetch={false} />}
+                        isActive={editActive}
+                        className="h-8 rounded-lg text-[12px] data-active:bg-sidebar-primary data-active:text-sidebar-primary-foreground"
+                      >
+                        <PencilLine aria-hidden="true" />
+                        <span>Edit</span>
+                      </SidebarMenuSubButton>
+                    </SidebarMenuSubItem>
+                  </SidebarMenuSub>
+                ) : null}
+              </SidebarMenuItem>
+            );
+          }
 
           return (
             <SidebarMenuItem key={href}>
