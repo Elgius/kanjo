@@ -32,15 +32,26 @@ function combineItems(items: RecordSaleInput["items"]) {
   return [...quantities].map(([itemId, quantity]) => ({ itemId, quantity }));
 }
 
-type Requirement = {
+export type InventoryRequirement = {
   productId: string;
   productName: string;
   measuredQuantity: number;
 };
 
-async function deductRequirements(
+export type SaleLine = {
+  productId?: string;
+  menuItemId?: string;
+  productName: string;
+  productSku: string | null;
+  itemCategory: string;
+  quantity: number;
+  unitPriceLaari: number;
+  lineTotalLaari: number;
+};
+
+export async function deductRequirements(
   tx: Prisma.TransactionClient,
-  requirements: Requirement[],
+  requirements: InventoryRequirement[],
   allowUndated: boolean,
 ) {
   const today = maldivesDate();
@@ -87,10 +98,120 @@ async function deductRequirements(
   return deductions;
 }
 
-export async function recordSale(db: PrismaClient, input: RecordSaleInput) {
-  const items = combineItems(input.items);
-  if (items.length === 0) throw new PosError("A sale must contain at least one item.");
+export async function prepareSaleInventory(
+  tx: Prisma.TransactionClient,
+  shift: { registerId: string; register: { purpose: "SHOP" | "RESTAURANT" } },
+  rawItems: ReadonlyArray<{ itemId: string; quantity: number }>,
+) {
+  const items = combineItems(rawItems);
+  if (!items.length) throw new PosError("A sale must contain at least one item.");
 
+  let lines: SaleLine[];
+  let requirements: InventoryRequirement[];
+  if (shift.register.purpose === "SHOP") {
+    const products = await tx.product.findMany({
+      where: { id: { in: items.map((item) => item.itemId) }, registerId: shift.registerId, active: true },
+    });
+    if (products.length !== items.length) throw new PosError("One or more products are unavailable at this register.");
+    const byId = new Map(products.map((product) => [product.id, product]));
+    lines = items.map((item) => {
+      const product = byId.get(item.itemId)!;
+      return {
+        productId: product.id,
+        productName: product.name,
+        productSku: product.sku,
+        itemCategory: product.category,
+        quantity: item.quantity,
+        unitPriceLaari: product.retailPriceLaari,
+        lineTotalLaari: product.retailPriceLaari * item.quantity,
+      };
+    });
+    requirements = lines.map((line) => {
+      const product = byId.get(line.productId!)!;
+      return {
+        productId: product.id,
+        productName: product.name,
+        measuredQuantity: measuredPerStockUnit(product) * line.quantity,
+      };
+    });
+  } else {
+    const itemIds = items.map((item) => item.itemId);
+    const [menuItems, standaloneProducts] = await Promise.all([
+      tx.menuItem.findMany({
+        where: { id: { in: itemIds }, registerId: shift.registerId, active: true },
+        include: { ingredients: { include: { product: true } } },
+      }),
+      tx.product.findMany({
+        where: {
+          id: { in: itemIds },
+          registerId: shift.registerId,
+          active: true,
+          menuIngredients: { some: { standalone: true } },
+        },
+      }),
+    ]);
+    if (menuItems.length + standaloneProducts.length !== items.length) throw new PosError("One or more menu items are unavailable at this register.");
+    if (menuItems.some((item) => item.ingredients.length === 0)) throw new PosError("A selected menu item has no recipe.");
+    const byId = new Map(menuItems.map((item) => [item.id, item]));
+    const productsById = new Map(standaloneProducts.map((product) => [product.id, product]));
+    lines = items.map((item) => {
+      const menuItem = byId.get(item.itemId);
+      if (!menuItem) {
+        const product = productsById.get(item.itemId)!;
+        return {
+          productId: product.id,
+          productName: product.name,
+          productSku: product.sku,
+          itemCategory: product.category,
+          quantity: item.quantity,
+          unitPriceLaari: product.retailPriceLaari,
+          lineTotalLaari: product.retailPriceLaari * item.quantity,
+        };
+      }
+      return {
+        menuItemId: menuItem.id,
+        productName: menuItem.name,
+        productSku: null,
+        itemCategory: menuItem.category,
+        quantity: item.quantity,
+        unitPriceLaari: menuItem.retailPriceLaari,
+        lineTotalLaari: menuItem.retailPriceLaari * item.quantity,
+      };
+    });
+    const requirementMap = new Map<string, InventoryRequirement>();
+    for (const item of items) {
+      const menuItem = byId.get(item.itemId);
+      if (!menuItem) {
+        const product = productsById.get(item.itemId)!;
+        requirementMap.set(product.id, {
+          productId: product.id,
+          productName: product.name,
+          measuredQuantity: Number(
+            (((requirementMap.get(product.id)?.measuredQuantity ?? 0) + measuredPerServing(product) * item.quantity)).toFixed(3),
+          ),
+        });
+        continue;
+      }
+      for (const ingredient of menuItem.ingredients) {
+        if (!ingredient.product.active || ingredient.product.registerId !== shift.registerId) {
+          throw new PosError(`${ingredient.product.name} is unavailable for this recipe.`);
+        }
+        const amount = measuredPerServing(ingredient.product) * ingredient.servingMultiplier * item.quantity;
+        const existing = requirementMap.get(ingredient.productId);
+        requirementMap.set(ingredient.productId, {
+          productId: ingredient.productId,
+          productName: ingredient.product.name,
+          measuredQuantity: Number(((existing?.measuredQuantity ?? 0) + amount).toFixed(3)),
+        });
+      }
+    }
+    requirements = [...requirementMap.values()];
+  }
+
+  return { lines, requirements };
+}
+
+export async function recordSale(db: PrismaClient, input: RecordSaleInput) {
   return db.$transaction(async (tx) => {
     const shift = await tx.registerShift.findFirst({
       where: { id: input.shiftId, status: "OPEN" },
@@ -114,82 +235,7 @@ export async function recordSale(db: PrismaClient, input: RecordSaleInput) {
       if (!heldOrder) throw new PosError("That held order is no longer available.");
     }
 
-    let lines: Array<{
-      productId?: string;
-      menuItemId?: string;
-      productName: string;
-      productSku: string | null;
-      itemCategory: string;
-      quantity: number;
-      unitPriceLaari: number;
-      lineTotalLaari: number;
-    }>;
-    let requirements: Requirement[];
-
-    if (shift.register.purpose === "SHOP") {
-      const products = await tx.product.findMany({
-        where: { id: { in: items.map((item) => item.itemId) }, registerId: shift.registerId, active: true },
-      });
-      if (products.length !== items.length) throw new PosError("One or more products are unavailable at this register.");
-      const byId = new Map(products.map((product) => [product.id, product]));
-      lines = items.map((item) => {
-        const product = byId.get(item.itemId)!;
-        return {
-          productId: product.id,
-          productName: product.name,
-          productSku: product.sku,
-          itemCategory: product.category,
-          quantity: item.quantity,
-          unitPriceLaari: product.retailPriceLaari,
-          lineTotalLaari: product.retailPriceLaari * item.quantity,
-        };
-      });
-      requirements = lines.map((line) => {
-        const product = byId.get(line.productId!)!;
-        return {
-          productId: product.id,
-          productName: product.name,
-          measuredQuantity: measuredPerStockUnit(product) * line.quantity,
-        };
-      });
-    } else {
-      const menuItems = await tx.menuItem.findMany({
-        where: { id: { in: items.map((item) => item.itemId) }, registerId: shift.registerId, active: true },
-        include: { ingredients: { include: { product: true } } },
-      });
-      if (menuItems.length !== items.length) throw new PosError("One or more menu items are unavailable at this register.");
-      if (menuItems.some((item) => item.ingredients.length === 0)) throw new PosError("A selected menu item has no recipe.");
-      const byId = new Map(menuItems.map((item) => [item.id, item]));
-      lines = items.map((item) => {
-        const menuItem = byId.get(item.itemId)!;
-        return {
-          menuItemId: menuItem.id,
-          productName: menuItem.name,
-          productSku: null,
-          itemCategory: menuItem.category,
-          quantity: item.quantity,
-          unitPriceLaari: menuItem.retailPriceLaari,
-          lineTotalLaari: menuItem.retailPriceLaari * item.quantity,
-        };
-      });
-      const requirementMap = new Map<string, Requirement>();
-      for (const item of items) {
-        const menuItem = byId.get(item.itemId)!;
-        for (const ingredient of menuItem.ingredients) {
-          if (!ingredient.product.active || ingredient.product.registerId !== shift.registerId) {
-            throw new PosError(`${ingredient.product.name} is unavailable for this recipe.`);
-          }
-          const amount = measuredPerServing(ingredient.product) * ingredient.servingMultiplier * item.quantity;
-          const existing = requirementMap.get(ingredient.productId);
-          requirementMap.set(ingredient.productId, {
-            productId: ingredient.productId,
-            productName: ingredient.product.name,
-            measuredQuantity: Number(((existing?.measuredQuantity ?? 0) + amount).toFixed(3)),
-          });
-        }
-      }
-      requirements = [...requirementMap.values()];
-    }
+    const { lines, requirements } = await prepareSaleInventory(tx, shift, input.items);
 
     const deductions = await deductRequirements(tx, requirements, shift.register.purpose === "SHOP");
     const totalLaari = lines.reduce((total, line) => total + line.lineTotalLaari, 0);

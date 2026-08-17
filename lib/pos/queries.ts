@@ -6,6 +6,7 @@ import { prisma } from "@/lib/db";
 import { formatHour, getBusinessDayRange, getMaldivesHour, shiftRange } from "@/lib/pos/dates";
 import { maldivesDate, measuredPerServing, quantityNumber, stockUnitsFromMeasured } from "@/lib/pos/inventory";
 import { fuzzySearchMatches, fuzzySearchScore } from "@/lib/pos/search";
+import { getCustomerOptions } from "@/lib/pos/customers";
 
 export type InventoryFilters = {
   query?: string;
@@ -611,35 +612,60 @@ async function getSellableItems(register: { id: string; purpose: string }): Prom
 
   if (register.purpose === "RESTAURANT") {
     const today = maldivesDate();
-    const rows = await prisma.menuItem.findMany({
-      where: { registerId: register.id, active: true },
-      orderBy: { name: "asc" },
-      select: {
-        id: true,
-        name: true,
-        category: true,
-        retailPriceLaari: true,
-        ingredients: {
-          select: {
-            servingMultiplier: true,
-            product: {
-              select: {
-                name: true,
-                kind: true,
-                quantityMetric: true,
-                quantityValue: true,
-                servingSize: true,
-                batches: {
-                  where: { remainingQuantity: { gt: 0 } },
-                  select: { remainingQuantity: true, expiryDate: true },
+    const [rows, standaloneProducts] = await Promise.all([
+      prisma.menuItem.findMany({
+        where: { registerId: register.id, active: true },
+        orderBy: { name: "asc" },
+        select: {
+          id: true,
+          name: true,
+          category: true,
+          retailPriceLaari: true,
+          ingredients: {
+            select: {
+              servingMultiplier: true,
+              product: {
+                select: {
+                  name: true,
+                  kind: true,
+                  quantityMetric: true,
+                  quantityValue: true,
+                  servingSize: true,
+                  batches: {
+                    where: { remainingQuantity: { gt: 0 } },
+                    select: { remainingQuantity: true, expiryDate: true },
+                  },
                 },
               },
             },
           },
         },
-      },
-    });
-    return rows.map((item) => {
+      }),
+      prisma.product.findMany({
+        where: {
+          registerId: register.id,
+          active: true,
+          menuIngredients: { some: { standalone: true } },
+        },
+        orderBy: { name: "asc" },
+        select: {
+          id: true,
+          name: true,
+          sku: true,
+          category: true,
+          retailPriceLaari: true,
+          kind: true,
+          quantityMetric: true,
+          quantityValue: true,
+          servingSize: true,
+          batches: {
+            where: { remainingQuantity: { gt: 0 } },
+            select: { remainingQuantity: true, expiryDate: true },
+          },
+        },
+      }),
+    ]);
+    const menuSellables = rows.map((item) => {
       if (!item.ingredients.length) {
         return {
           id: item.id,
@@ -685,6 +711,35 @@ async function getSellableItems(register: { id: string; purpose: string }): Prom
         soldOutReason: limiting.count ? null : limiting.reason,
       };
     });
+    const standaloneSellables = standaloneProducts.map((product) => {
+      const usable = product.batches
+        .filter((batch) => batch.expiryDate && batch.expiryDate >= today)
+        .reduce((sum, batch) => sum + quantityNumber(batch.remainingQuantity), 0);
+      const perItem = measuredPerServing(product);
+      const available = perItem > 0 ? Math.floor(usable / perItem + 0.000001) : 0;
+      const hasUndated = product.batches.some((batch) => !batch.expiryDate);
+      const hasExpired = product.batches.some(
+        (batch) => batch.expiryDate && batch.expiryDate < today,
+      );
+      return {
+        id: product.id,
+        name: product.name,
+        sku: product.sku,
+        category: product.category,
+        stockQuantity: available,
+        retailPriceLaari: product.retailPriceLaari,
+        soldOutReason: available
+          ? null
+          : hasUndated
+            ? "Expiry missing"
+            : hasExpired
+              ? "Stock expired"
+              : "Insufficient stock",
+      };
+    });
+    return [...menuSellables, ...standaloneSellables].sort((left, right) =>
+      left.name.localeCompare(right.name),
+    );
   }
 
   return [];
@@ -742,7 +797,7 @@ export async function getRegisterManagementData(registerId: string, receiptId?: 
   if (!register) return null;
 
   const shift = register.shifts[0] ?? null;
-  const [items, lastSale, heldOrders, receipt] = await Promise.all([
+  const [items, lastSale, heldOrders, receipt, restaurantTables, creditCustomers] = await Promise.all([
     getSellableItems(register),
     shift
       ? prisma.sale.findFirst({
@@ -760,6 +815,8 @@ export async function getRegisterManagementData(registerId: string, receiptId?: 
             id: true,
             customerNote: true,
             paymentMethod: true,
+            restaurantTableId: true,
+            restaurantTable: { select: { name: true } },
             totalLaari: true,
             heldAt: true,
             items: {
@@ -798,6 +855,23 @@ export async function getRegisterManagementData(registerId: string, receiptId?: 
           },
         })
       : Promise.resolve(null),
+    register.purpose === "RESTAURANT"
+      ? prisma.restaurantTable.findMany({
+          where: { registerId, active: true },
+          orderBy: { name: "asc" },
+          select: {
+            id: true,
+            name: true,
+            seats: true,
+            orders: {
+              where: { status: "HELD" },
+              take: 1,
+              select: { id: true },
+            },
+          },
+        })
+      : Promise.resolve([]),
+    getCustomerOptions(),
   ]);
 
   return {
@@ -812,6 +886,13 @@ export async function getRegisterManagementData(registerId: string, receiptId?: 
           createdAt: receipt.createdAt.toISOString(),
         }
       : null,
+    restaurantTables: restaurantTables.map((table) => ({
+      id: table.id,
+      name: table.name,
+      seats: table.seats,
+      occupiedOrderId: table.orders[0]?.id ?? null,
+    })),
+    creditCustomers,
     heldOrders: heldOrders.map((order) => ({
       ...order,
       items: order.items.flatMap((item) => {

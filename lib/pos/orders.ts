@@ -8,6 +8,7 @@ export type HoldRegisterOrderInput = {
   shiftId: string;
   createdById: string;
   heldOrderId?: string | null;
+  restaurantTableId?: string | null;
   customerNote?: string | null;
   paymentMethod?: "CASH" | "CARD" | "MOBILE";
   items: ReadonlyArray<HeldOrderItem>;
@@ -35,6 +36,35 @@ export async function holdRegisterOrder(db: PrismaClient, input: HoldRegisterOrd
       select: { id: true, registerId: true, register: { select: { purpose: true } } },
     });
     if (!shift) throw new PosError("The selected register does not have an open shift.");
+
+    let restaurantTableId: string | null = null;
+    if (shift.register.purpose === "RESTAURANT") {
+      if (!input.restaurantTableId) {
+        throw new PosError("Select a restaurant table before holding this bill.");
+      }
+      const table = await tx.restaurantTable.findFirst({
+        where: {
+          id: input.restaurantTableId,
+          registerId: shift.registerId,
+          active: true,
+        },
+        select: {
+          id: true,
+          name: true,
+          orders: {
+            where: {
+              status: "HELD",
+              ...(input.heldOrderId ? { id: { not: input.heldOrderId } } : {}),
+            },
+            take: 1,
+            select: { id: true },
+          },
+        },
+      });
+      if (!table) throw new PosError("Select an active table from this restaurant.");
+      if (table.orders.length) throw new PosError(`${table.name} already has an open bill.`);
+      restaurantTableId = table.id;
+    }
 
     let lines: Array<{
       productId?: string;
@@ -72,19 +102,43 @@ export async function holdRegisterOrder(db: PrismaClient, input: HoldRegisterOrd
         };
       });
     } else {
-      const menuItems = await tx.menuItem.findMany({
-        where: {
-          id: { in: items.map((item) => item.itemId) },
-          registerId: shift.registerId,
-          active: true,
-        },
-      });
-      if (menuItems.length !== items.length) {
+      const itemIds = items.map((item) => item.itemId);
+      const [menuItems, standaloneProducts] = await Promise.all([
+        tx.menuItem.findMany({
+          where: {
+            id: { in: itemIds },
+            registerId: shift.registerId,
+            active: true,
+          },
+        }),
+        tx.product.findMany({
+          where: {
+            id: { in: itemIds },
+            registerId: shift.registerId,
+            active: true,
+            menuIngredients: { some: { standalone: true } },
+          },
+        }),
+      ]);
+      if (menuItems.length + standaloneProducts.length !== items.length) {
         throw new PosError("One or more menu items are unavailable at this register.");
       }
       const byId = new Map(menuItems.map((item) => [item.id, item]));
+      const productsById = new Map(standaloneProducts.map((product) => [product.id, product]));
       lines = items.map((item) => {
-        const menuItem = byId.get(item.itemId)!;
+        const menuItem = byId.get(item.itemId);
+        if (!menuItem) {
+          const product = productsById.get(item.itemId)!;
+          return {
+            productId: product.id,
+            productName: product.name,
+            productSku: product.sku,
+            itemCategory: product.category,
+            quantity: item.quantity,
+            unitPriceLaari: product.retailPriceLaari,
+            lineTotalLaari: product.retailPriceLaari * item.quantity,
+          };
+        }
         return {
           menuItemId: menuItem.id,
           productName: menuItem.name,
@@ -102,6 +156,7 @@ export async function holdRegisterOrder(db: PrismaClient, input: HoldRegisterOrd
       createdById: input.createdById,
       customerNote: input.customerNote?.trim().slice(0, 500) || null,
       paymentMethod: input.paymentMethod,
+      restaurantTableId,
       subtotalLaari: totalLaari,
       totalLaari,
       heldAt: new Date(),
@@ -148,6 +203,7 @@ export async function holdRegisterOrder(db: PrismaClient, input: HoldRegisterOrd
           registerShiftId: shift.id,
           totalLaari,
           lineCount: lines.length,
+          restaurantTableId,
         },
         request: input.audit.request,
       }),

@@ -6,12 +6,15 @@ databaseDescribe("Neon sale transaction", () => {
   let db: PrismaClient;
   let recordSale: typeof import("@/lib/pos/sales").recordSale;
   let holdRegisterOrder: typeof import("@/lib/pos/orders").holdRegisterOrder;
+  let issueCustomerCredit: typeof import("@/lib/pos/customers").issueCustomerCredit;
+  let settleCustomerCredit: typeof import("@/lib/pos/customers").settleCustomerCredit;
   let userId: string;
   let roleId: string;
   let registerId: string;
   let shiftId: string;
   let productId: string;
   let categoryId: string;
+  let customerId: string;
   const marker = `codex-test-${crypto.randomUUID()}`;
 
   beforeAll(async () => {
@@ -19,6 +22,7 @@ databaseDescribe("Neon sale transaction", () => {
     ({ prisma: db } = await import("@/lib/db"));
     ({ recordSale } = await import("@/lib/pos/sales"));
     ({ holdRegisterOrder } = await import("@/lib/pos/orders"));
+    ({ issueCustomerCredit, settleCustomerCredit } = await import("@/lib/pos/customers"));
 
     const role = await db.role.create({
       data: { name: marker, normalizedName: marker },
@@ -52,6 +56,9 @@ databaseDescribe("Neon sale transaction", () => {
       },
     });
     productId = product.id;
+    customerId = (await db.customer.create({
+      data: { name: "Credit Customer", nationality: "Maldivian", creditLimitLaari: 2_500 },
+    })).id;
     await db.inventoryBatch.create({ data: {
       productId, registerId, receivedById: userId,
       receivedQuantity: 5, remainingQuantity: 5,
@@ -63,11 +70,13 @@ databaseDescribe("Neon sale transaction", () => {
     await db.auditLog.deleteMany({ where: { actorId: userId } });
     await db.inventoryMovement.deleteMany({ where: { createdById: userId } });
     await db.bill.deleteMany({ where: { sale: { createdById: userId } } });
+    await db.customerCreditBill.deleteMany({ where: { customerId } });
     await db.sale.deleteMany({ where: { createdById: userId } });
     await db.registerOrder.deleteMany({ where: { createdById: userId } });
     await db.inventoryBatch.deleteMany({ where: { productId } });
     await db.product.deleteMany({ where: { id: productId } });
     await db.productCategory.deleteMany({ where: { id: categoryId } });
+    await db.customer.deleteMany({ where: { id: customerId } });
     await db.registerShift.deleteMany({ where: { registerId } });
     await db.cashRegister.deleteMany({ where: { id: registerId } });
     await db.user.deleteMany({ where: { id: userId } });
@@ -155,5 +164,44 @@ databaseDescribe("Neon sale transaction", () => {
     const completed = await db.registerOrder.findUniqueOrThrow({ where: { id: order.id } });
     expect(completed.status).toBe("COMPLETED");
     expect(completed.saleId).toBe(sale.id);
+  });
+
+  test("deducts stock on customer credit and records the sale only when paid", async () => {
+    const beforeStock = Number((await db.inventoryBatch.aggregate({
+      where: { productId },
+      _sum: { remainingQuantity: true },
+    }))._sum.remainingQuantity);
+    const salesBefore = await db.sale.count({ where: { createdById: userId } });
+    const creditBill = await issueCustomerCredit(db, {
+      shiftId,
+      customerId,
+      createdById: userId,
+      items: [{ itemId: productId, quantity: 1 }],
+      audit: { actorLabel: marker },
+    });
+    expect(creditBill.totalLaari).toBe(2_500);
+    expect(await db.sale.count({ where: { createdById: userId } })).toBe(salesBefore);
+    expect(Number((await db.inventoryBatch.aggregate({ where: { productId }, _sum: { remainingQuantity: true } }))._sum.remainingQuantity)).toBe(beforeStock - 1);
+
+    await expect(issueCustomerCredit(db, {
+      shiftId,
+      customerId,
+      createdById: userId,
+      items: [{ itemId: productId, quantity: 1 }],
+      audit: { actorLabel: marker },
+    })).rejects.toThrow("does not have enough available credit");
+
+    const sale = await settleCustomerCredit(db, {
+      creditBillId: creditBill.id,
+      settledById: userId,
+      cashierName: "Integration Test",
+      paymentMethod: "CARD",
+      audit: { actorLabel: marker },
+    });
+    expect(sale.receiptNumber > 0).toBe(true);
+    const paid = await db.customerCreditBill.findUniqueOrThrow({ where: { id: creditBill.id } });
+    expect(paid.status).toBe("PAID");
+    expect(paid.saleId).toBe(sale.id);
+    expect(Number((await db.inventoryBatch.aggregate({ where: { productId }, _sum: { remainingQuantity: true } }))._sum.remainingQuantity)).toBe(beforeStock - 1);
   });
 });

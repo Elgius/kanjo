@@ -124,6 +124,7 @@ const deniedPath: Record<PageKey, string> = {
   STOCK: "/stock?error=You%20do%20not%20have%20permission%20to%20edit%20stock.",
   REPORTING: "/reporting",
   BILL_HISTORY: "/bill-history",
+  CUSTOMERS: "/customers?error=You%20do%20not%20have%20permission%20to%20edit%20customers.",
   SETTINGS: "/settings?error=Site%20administrator%20access%20is%20required.",
   AUDIT_LOG: "/settings/audit-log",
 };

@@ -8,27 +8,29 @@ datasource db {
 }
 
 model User {
-  id              String              @id
-  name            String
-  email           String
-  username        String?             @unique
-  displayUsername String?
-  emailVerified   Boolean             @default(false)
-  image           String?
-  roleId          String              @db.Uuid
-  isSiteAdmin     Boolean             @default(false)
-  createdAt       DateTime            @default(now())
-  updatedAt       DateTime            @updatedAt
-  role            Role                @relation(fields: [roleId], references: [id], onDelete: Restrict)
-  sessions        Session[]
-  accounts        Account[]
-  openedShifts    RegisterShift[]     @relation("ShiftOpenedBy")
-  closedShifts    RegisterShift[]     @relation("ShiftClosedBy")
-  sales           Sale[]              @relation("SaleCreatedBy")
-  registerOrders  RegisterOrder[]     @relation("RegisterOrderCreatedBy")
-  stockChanges    InventoryMovement[]
-  receivedBatches InventoryBatch[]    @relation("BatchReceivedBy")
-  auditLogs       AuditLog[]          @relation("AuditActor")
+  id                 String               @id
+  name               String
+  email              String
+  username           String?              @unique
+  displayUsername    String?
+  emailVerified      Boolean              @default(false)
+  image              String?
+  roleId             String               @db.Uuid
+  isSiteAdmin        Boolean              @default(false)
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+  role               Role                 @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  sessions           Session[]
+  accounts           Account[]
+  openedShifts       RegisterShift[]      @relation("ShiftOpenedBy")
+  closedShifts       RegisterShift[]      @relation("ShiftClosedBy")
+  sales              Sale[]               @relation("SaleCreatedBy")
+  registerOrders     RegisterOrder[]      @relation("RegisterOrderCreatedBy")
+  creditBillsCreated CustomerCreditBill[] @relation("CreditBillCreatedBy")
+  creditBillsSettled CustomerCreditBill[] @relation("CreditBillSettledBy")
+  stockChanges       InventoryMovement[]
+  receivedBatches    InventoryBatch[]     @relation("BatchReceivedBy")
+  auditLogs          AuditLog[]           @relation("AuditActor")
 
   @@unique([email])
   @@index([roleId])
@@ -43,6 +45,7 @@ enum PageKey {
   STOCK
   REPORTING
   BILL_HISTORY
+  CUSTOMERS
   SETTINGS
   AUDIT_LOG
 }
@@ -151,6 +154,12 @@ enum RegisterPurpose {
   RESTAURANT
 }
 
+enum CustomerCreditStatus {
+  OUTSTANDING
+  PAID
+  CANCELLED
+}
+
 model Product {
   id                 String               @id @default(uuid()) @db.Uuid
   registerId         String               @db.Uuid
@@ -200,21 +209,58 @@ model ProductCategory {
 }
 
 model CashRegister {
-  id             String              @id @default(uuid()) @db.Uuid
-  code           String              @unique
-  name           String              @unique
-  purpose        RegisterPurpose     @default(SHOP)
-  active         Boolean             @default(true)
-  createdAt      DateTime            @default(now())
-  updatedAt      DateTime            @updatedAt
-  shifts         RegisterShift[]
-  products       Product[]
-  stockMovements InventoryMovement[]
-  menuItems      MenuItem[]
-  batches        InventoryBatch[]
+  id                  String               @id @default(uuid()) @db.Uuid
+  code                String               @unique
+  name                String               @unique
+  purpose             RegisterPurpose      @default(SHOP)
+  active              Boolean              @default(true)
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  shifts              RegisterShift[]
+  products            Product[]
+  stockMovements      InventoryMovement[]
+  menuItems           MenuItem[]
+  restaurantTables    RestaurantTable[]
+  customerCreditBills CustomerCreditBill[]
+  batches             InventoryBatch[]
 
   @@index([active, name])
   @@map("cash_registers")
+}
+
+model RestaurantTable {
+  id         String          @id @default(uuid()) @db.Uuid
+  registerId String          @db.Uuid
+  name       String
+  seats      Int
+  active     Boolean         @default(true)
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
+  register   CashRegister    @relation(fields: [registerId], references: [id], onDelete: Restrict)
+  orders     RegisterOrder[]
+
+  @@unique([registerId, name])
+  @@index([registerId, active, name])
+  @@map("restaurant_tables")
+}
+
+model Customer {
+  id               String               @id @default(uuid()) @db.Uuid
+  name             String
+  email            String?
+  address          String?
+  phoneNumber      String?
+  nationality      String
+  creditLimitLaari Int
+  active           Boolean              @default(true)
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+  creditBills      CustomerCreditBill[]
+
+  @@index([active, name])
+  @@index([email])
+  @@index([phoneNumber])
+  @@map("customers")
 }
 
 model MenuItem {
@@ -240,6 +286,7 @@ model MenuItemIngredient {
   menuItemId        String   @db.Uuid
   productId         String   @db.Uuid
   servingMultiplier Int
+  standalone        Boolean  @default(false)
   menuItem          MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
   product           Product  @relation(fields: [productId], references: [id], onDelete: Restrict)
 
@@ -266,20 +313,22 @@ model InventoryBatch {
 }
 
 model RegisterShift {
-  id               String          @id @default(uuid()) @db.Uuid
-  registerId       String          @db.Uuid
-  openedById       String
-  closedById       String?
-  status           ShiftStatus     @default(OPEN)
-  openingCashLaari Int             @default(0)
-  closingCashLaari Int?
-  openedAt         DateTime        @default(now())
-  closedAt         DateTime?
-  register         CashRegister    @relation(fields: [registerId], references: [id], onDelete: Restrict)
-  openedBy         User            @relation("ShiftOpenedBy", fields: [openedById], references: [id], onDelete: Restrict)
-  closedBy         User?           @relation("ShiftClosedBy", fields: [closedById], references: [id], onDelete: Restrict)
-  sales            Sale[]
-  registerOrders   RegisterOrder[]
+  id                 String               @id @default(uuid()) @db.Uuid
+  registerId         String               @db.Uuid
+  openedById         String
+  closedById         String?
+  status             ShiftStatus          @default(OPEN)
+  openingCashLaari   Int                  @default(0)
+  closingCashLaari   Int?
+  openedAt           DateTime             @default(now())
+  closedAt           DateTime?
+  register           CashRegister         @relation(fields: [registerId], references: [id], onDelete: Restrict)
+  openedBy           User                 @relation("ShiftOpenedBy", fields: [openedById], references: [id], onDelete: Restrict)
+  closedBy           User?                @relation("ShiftClosedBy", fields: [closedById], references: [id], onDelete: Restrict)
+  sales              Sale[]
+  registerOrders     RegisterOrder[]
+  issuedCreditBills  CustomerCreditBill[] @relation("CreditBillIssuedShift")
+  settledCreditBills CustomerCreditBill[] @relation("CreditBillSettledShift")
 
   @@index([registerId, status, openedAt(sort: Desc)])
   @@index([openedById])
@@ -288,22 +337,23 @@ model RegisterShift {
 }
 
 model Sale {
-  id              String              @id @default(uuid()) @db.Uuid
-  receiptNumber   BigInt              @unique @default(autoincrement())
-  registerShiftId String              @db.Uuid
-  createdById     String
-  status          SaleStatus          @default(COMPLETED)
-  paymentMethod   PaymentMethod
-  subtotalLaari   Int
-  totalLaari      Int
-  createdAt       DateTime            @default(now())
-  refundedAt      DateTime?
-  registerShift   RegisterShift       @relation(fields: [registerShiftId], references: [id], onDelete: Restrict)
-  createdBy       User                @relation("SaleCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  items           SaleItem[]
-  stockMovements  InventoryMovement[]
-  registerOrder   RegisterOrder?
-  bill            Bill?
+  id                 String              @id @default(uuid()) @db.Uuid
+  receiptNumber      BigInt              @unique @default(autoincrement())
+  registerShiftId    String              @db.Uuid
+  createdById        String
+  status             SaleStatus          @default(COMPLETED)
+  paymentMethod      PaymentMethod
+  subtotalLaari      Int
+  totalLaari         Int
+  createdAt          DateTime            @default(now())
+  refundedAt         DateTime?
+  registerShift      RegisterShift       @relation(fields: [registerShiftId], references: [id], onDelete: Restrict)
+  createdBy          User                @relation("SaleCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  items              SaleItem[]
+  stockMovements     InventoryMovement[]
+  registerOrder      RegisterOrder?
+  bill               Bill?
+  customerCreditBill CustomerCreditBill?
 
   @@index([status, createdAt(sort: Desc)])
   @@index([registerShiftId, createdAt(sort: Desc)])
@@ -312,25 +362,61 @@ model Sale {
 }
 
 model Bill {
-  id              String        @id @default(uuid()) @db.Uuid
-  saleId          String        @unique @db.Uuid
-  receiptNumber   BigInt        @unique
-  registerId      String        @db.Uuid
-  registerName    String
-  registerCode    String
-  cashierName     String
-  paymentMethod   PaymentMethod
-  subtotalLaari   Int
-  totalLaari      Int
-  items           Json
-  soldAt          DateTime
-  createdAt       DateTime      @default(now())
-  sale            Sale          @relation(fields: [saleId], references: [id], onDelete: Restrict)
+  id            String        @id @default(uuid()) @db.Uuid
+  saleId        String        @unique @db.Uuid
+  receiptNumber BigInt        @unique
+  registerId    String        @db.Uuid
+  registerName  String
+  registerCode  String
+  cashierName   String
+  paymentMethod PaymentMethod
+  subtotalLaari Int
+  totalLaari    Int
+  items         Json
+  soldAt        DateTime
+  createdAt     DateTime      @default(now())
+  sale          Sale          @relation(fields: [saleId], references: [id], onDelete: Restrict)
 
   @@index([soldAt(sort: Desc), id(sort: Desc)])
   @@index([registerId, soldAt(sort: Desc), id(sort: Desc)])
   @@index([paymentMethod, soldAt(sort: Desc)])
   @@map("bills")
+}
+
+model CustomerCreditBill {
+  id             String               @id @default(uuid()) @db.Uuid
+  customerId     String               @db.Uuid
+  registerId     String               @db.Uuid
+  issuedShiftId  String               @db.Uuid
+  createdById    String
+  settledShiftId String?              @db.Uuid
+  settledById    String?
+  saleId         String?              @unique @db.Uuid
+  status         CustomerCreditStatus @default(OUTSTANDING)
+  subtotalLaari  Int
+  totalLaari     Int
+  items          Json
+  note           String?
+  issuedAt       DateTime             @default(now())
+  paidAt         DateTime?
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+  customer       Customer             @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  register       CashRegister         @relation(fields: [registerId], references: [id], onDelete: Restrict)
+  issuedShift    RegisterShift        @relation("CreditBillIssuedShift", fields: [issuedShiftId], references: [id], onDelete: Restrict)
+  createdBy      User                 @relation("CreditBillCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  settledShift   RegisterShift?       @relation("CreditBillSettledShift", fields: [settledShiftId], references: [id], onDelete: Restrict)
+  settledBy      User?                @relation("CreditBillSettledBy", fields: [settledById], references: [id], onDelete: Restrict)
+  sale           Sale?                @relation(fields: [saleId], references: [id], onDelete: Restrict)
+  stockMovements InventoryMovement[]
+
+  @@index([customerId, status, issuedAt(sort: Desc)])
+  @@index([registerId, status, issuedAt(sort: Desc)])
+  @@index([issuedShiftId])
+  @@index([settledShiftId])
+  @@index([createdById])
+  @@index([settledById])
+  @@map("customer_credit_bills")
 }
 
 model SaleItem {
@@ -355,27 +441,30 @@ model SaleItem {
 }
 
 model RegisterOrder {
-  id              String              @id @default(uuid()) @db.Uuid
-  registerShiftId String              @db.Uuid
-  createdById     String
-  saleId          String?             @unique @db.Uuid
-  status          RegisterOrderStatus @default(HELD)
-  customerNote    String?
-  paymentMethod   PaymentMethod?
-  subtotalLaari   Int
-  totalLaari      Int
-  heldAt          DateTime            @default(now())
-  completedAt     DateTime?
-  cancelledAt     DateTime?
-  createdAt       DateTime            @default(now())
-  updatedAt       DateTime            @updatedAt
-  registerShift   RegisterShift       @relation(fields: [registerShiftId], references: [id], onDelete: Restrict)
-  createdBy       User                @relation("RegisterOrderCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  sale            Sale?               @relation(fields: [saleId], references: [id], onDelete: SetNull)
-  items           RegisterOrderItem[]
+  id                String              @id @default(uuid()) @db.Uuid
+  registerShiftId   String              @db.Uuid
+  createdById       String
+  saleId            String?             @unique @db.Uuid
+  restaurantTableId String?             @db.Uuid
+  status            RegisterOrderStatus @default(HELD)
+  customerNote      String?
+  paymentMethod     PaymentMethod?
+  subtotalLaari     Int
+  totalLaari        Int
+  heldAt            DateTime            @default(now())
+  completedAt       DateTime?
+  cancelledAt       DateTime?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  registerShift     RegisterShift       @relation(fields: [registerShiftId], references: [id], onDelete: Restrict)
+  createdBy         User                @relation("RegisterOrderCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  sale              Sale?               @relation(fields: [saleId], references: [id], onDelete: SetNull)
+  restaurantTable   RestaurantTable?    @relation(fields: [restaurantTableId], references: [id], onDelete: Restrict)
+  items             RegisterOrderItem[]
 
   @@index([registerShiftId, status, heldAt(sort: Desc)])
   @@index([createdById])
+  @@index([restaurantTableId, status])
   @@map("register_orders")
 }
 
@@ -401,27 +490,30 @@ model RegisterOrderItem {
 }
 
 model InventoryMovement {
-  id            String                @id @default(uuid()) @db.Uuid
-  productId     String                @db.Uuid
-  registerId    String                @db.Uuid
-  saleId        String?               @db.Uuid
-  createdById   String
-  type          InventoryMovementType
-  quantityDelta Decimal               @db.Decimal(14, 3)
-  balanceAfter  Decimal               @db.Decimal(14, 3)
-  reason        String?
-  searchText    String                @default("") @db.Text
-  createdAt     DateTime              @default(now())
-  product       Product               @relation(fields: [productId], references: [id], onDelete: Restrict)
-  register      CashRegister          @relation(fields: [registerId], references: [id], onDelete: Restrict)
-  sale          Sale?                 @relation(fields: [saleId], references: [id], onDelete: Restrict)
-  createdBy     User                  @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  id                   String                @id @default(uuid()) @db.Uuid
+  productId            String                @db.Uuid
+  registerId           String                @db.Uuid
+  saleId               String?               @db.Uuid
+  customerCreditBillId String?               @db.Uuid
+  createdById          String
+  type                 InventoryMovementType
+  quantityDelta        Decimal               @db.Decimal(14, 3)
+  balanceAfter         Decimal               @db.Decimal(14, 3)
+  reason               String?
+  searchText           String                @default("") @db.Text
+  createdAt            DateTime              @default(now())
+  product              Product               @relation(fields: [productId], references: [id], onDelete: Restrict)
+  register             CashRegister          @relation(fields: [registerId], references: [id], onDelete: Restrict)
+  sale                 Sale?                 @relation(fields: [saleId], references: [id], onDelete: Restrict)
+  customerCreditBill   CustomerCreditBill?   @relation(fields: [customerCreditBillId], references: [id], onDelete: Restrict)
+  createdBy            User                  @relation(fields: [createdById], references: [id], onDelete: Restrict)
 
   @@index([productId, createdAt(sort: Desc)])
   @@index([createdAt(sort: Desc), id(sort: Desc)])
   @@index([registerId, createdAt(sort: Desc), id(sort: Desc)])
   @@index([type, createdAt(sort: Desc), id(sort: Desc)])
   @@index([saleId])
+  @@index([customerCreditBillId])
   @@index([createdById])
   @@index([searchText(ops: raw("gin_trgm_ops"))], type: Gin, map: "inventory_movements_search_text_trgm_idx")
   @@map("inventory_movements")

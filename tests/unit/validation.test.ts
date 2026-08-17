@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { parseMenuItemForm, parseProductForm, parseRegisterCartForm, parseRegisterForm, parseSaleForm, parseStockAdjustment } from "@/lib/pos/validation";
+import { parseCreditSettlementForm, parseCustomerForm, parseMenuItemForm, parseProductForm, parseRegisterCartForm, parseRegisterEditForm, parseRegisterForm, parseRestaurantTableForm, parseSaleForm, parseStockAdjustment } from "@/lib/pos/validation";
 
 describe("POS form validation", () => {
   test("normalizes a valid product", () => {
@@ -100,13 +100,55 @@ describe("POS form validation", () => {
     expect(parseRegisterForm(form).ok).toBe(false);
     form.set("purpose", "RESTAURANT");
     expect(JSON.stringify(parseRegisterForm(form))).toBe(JSON.stringify({ ok: true, data: { name: "Restaurant", purpose: "RESTAURANT" } }));
+    form.set("status", "ARCHIVED");
+    expect(JSON.stringify(parseRegisterEditForm(form))).toBe(JSON.stringify({ ok: true, data: { name: "Restaurant", purpose: "RESTAURANT", active: false } }));
+  });
+
+  test("validates restaurant table names and seat counts", () => {
+    const form = new FormData();
+    form.set("name", "  Window   1  ");
+    form.set("seats", "4");
+    expect(JSON.stringify(parseRestaurantTableForm(form))).toBe(JSON.stringify({
+      ok: true,
+      data: { name: "Window 1", seats: 4 },
+    }));
+
+    form.set("seats", "0");
+    expect(parseRestaurantTableForm(form).ok).toBe(false);
+    form.set("seats", "4.5");
+    expect(parseRestaurantTableForm(form).ok).toBe(false);
+  });
+
+  test("validates customer credit details and settlement methods", () => {
+    const customer = new FormData();
+    customer.set("name", "  Amina   Ali ");
+    customer.set("email", "amina@example.com");
+    customer.set("nationality", "Maldivian");
+    customer.set("creditLimit", "2500.50");
+    const parsed = parseCustomerForm(customer);
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect(parsed.data.name).toBe("Amina Ali");
+      expect(parsed.data.creditLimitLaari).toBe(250050);
+    }
+
+    customer.set("email", "not-an-email");
+    expect(parseCustomerForm(customer).ok).toBe(false);
+    const settlement = new FormData();
+    settlement.set("paymentMethod", "CARD");
+    expect(parseCreditSettlementForm(settlement).ok).toBe(true);
+    settlement.set("paymentMethod", "CREDIT");
+    expect(parseCreditSettlementForm(settlement).ok).toBe(false);
   });
 
   test("validates menu recipes and whole serving multiples", () => {
     const form = new FormData();
     form.set("name", "Espresso"); form.set("category", "Coffee"); form.set("retailPrice", "45");
     form.append("ingredientProductId", "beans"); form.append("servingMultiplier", "1");
-    expect(parseMenuItemForm(form).ok).toBe(true);
+    form.append("standaloneProductId", "beans");
+    const parsed = parseMenuItemForm(form);
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) expect(parsed.data.ingredients[0].standalone).toBe(true);
     form.set("servingMultiplier", "0.5");
     expect(parseMenuItemForm(form).ok).toBe(false);
   });

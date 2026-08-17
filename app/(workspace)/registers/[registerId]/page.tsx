@@ -46,6 +46,7 @@ export default async function RegisterManagementPage({
   const success = single(query.success);
   const error = single(query.error);
   const selectedHeldOrderId = single(query.order);
+  const creditedBillId = single(query.credit);
   const cashExpectedLaari = shift
     ? shift.openingCashLaari + shift.cashSalesLaari
     : 0;
@@ -104,10 +105,10 @@ export default async function RegisterManagementPage({
           {register.purpose === "RESTAURANT" ? (
             <Link
               prefetch={false}
-              href={`/registers/${register.id}/menu`}
+              href={`/registers/${register.id}/restaurant`}
               className="flex h-10 items-center rounded-lg border border-border bg-card px-4 text-xs font-semibold"
             >
-              Manage menu
+              Restaurant
             </Link>
           ) : null}
           {shift ? (
@@ -148,10 +149,13 @@ export default async function RegisterManagementPage({
           </section>
 
           <RegisterSaleWorkspace
-            key={`${lastSale?.id ?? "empty"}:${data.heldOrders.map((order) => order.id).join(",")}`}
+            key={`${lastSale?.id ?? "empty"}:${creditedBillId ?? "no-credit"}:${data.heldOrders.map((order) => order.id).join(",")}`}
             registerId={register.id}
             shiftId={shift.id}
             items={data.items}
+            isRestaurant={register.purpose === "RESTAURANT"}
+            restaurantTables={data.restaurantTables}
+            creditCustomers={data.creditCustomers}
             heldOrders={data.heldOrders.map((order) => ({
               ...order,
               heldAt: order.heldAt.toISOString(),

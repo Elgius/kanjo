@@ -18,14 +18,21 @@ async function validateRecipe(registerId: string, formData: FormData) {
   if (!parsed.ok) return parsed;
   const register = await prisma.cashRegister.findFirst({ where: { id: registerId, active: true, purpose: "RESTAURANT" }, select: { id: true } });
   if (!register) return { ok: false, error: "Restaurant register not found." } as const;
-  const products = await prisma.product.findMany({
-    where: { id: { in: parsed.data.ingredients.map((item) => item.productId) }, registerId, active: true },
-    select: { id: true, name: true, batches: { where: { expiryDate: null, remainingQuantity: { gt: 0 } }, select: { id: true } } },
-  });
+  const [category, products] = await Promise.all([
+    prisma.productCategory.findUnique({
+      where: { normalizedName: parsed.data.category.toLocaleLowerCase("en") },
+      select: { name: true },
+    }),
+    prisma.product.findMany({
+      where: { id: { in: parsed.data.ingredients.map((item) => item.productId) }, registerId, active: true },
+      select: { id: true, name: true, batches: { where: { expiryDate: null, remainingQuantity: { gt: 0 } }, select: { id: true } } },
+    }),
+  ]);
+  if (!category) return { ok: false, error: "Select a category configured in Inventory." } as const;
   if (products.length !== parsed.data.ingredients.length) return { ok: false, error: "Every ingredient must be active and belong to this register." } as const;
   const undated = products.find((product) => product.batches.length > 0);
   if (undated) return { ok: false, error: `${undated.name} has stock with no expiry date. Assign it before using this ingredient.` } as const;
-  return parsed;
+  return { ...parsed, data: { ...parsed.data, category: category.name } };
 }
 
 export async function createMenuItemAction(registerId: string, formData: FormData) {
