@@ -2,10 +2,15 @@ import Link from "next/link";
 import { ExternalLink, Store, Trash2 } from "lucide-react";
 
 import { PageContainer, PageHeader, Surface } from "@/components/pos/primitives";
-import { canAccess, requirePageAccess } from "@/lib/authorization";
+import { authorizedRegisterIds, can, requireCapability } from "@/lib/authorization";
 import { prisma } from "@/lib/db";
 import { cn } from "@/lib/utils";
-import { deleteRegisterAction, updateRegisterAction } from "./actions";
+import {
+  changeRegisterTypeAction,
+  deleteRegisterAction,
+  renameRegisterAction,
+  setRegisterActiveAction,
+} from "./actions";
 
 const fieldClass = "h-10 min-w-0 rounded-lg border border-border bg-background px-3 text-xs outline-none focus:border-ring focus:ring-2 focus:ring-ring/15 disabled:cursor-not-allowed disabled:opacity-60";
 
@@ -28,12 +33,13 @@ export default async function EditRegistersPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const authorization = await requirePageAccess("REGISTERS");
-  const canEdit = canAccess(authorization, "REGISTERS", "EDIT");
+  const authorization = await requireCapability("REGISTER_ADMIN_VIEW", "REGISTER_ADMIN_PAGE");
+  const allowedRegisterIds = authorizedRegisterIds(authorization);
   const query = await searchParams;
   const success = single(query.success);
   const error = single(query.error);
   const registers = await prisma.cashRegister.findMany({
+    where: allowedRegisterIds ? { id: { in: allowedRegisterIds } } : undefined,
     orderBy: [{ active: "desc" }, { name: "asc" }],
     select: {
       id: true,
@@ -76,21 +82,29 @@ export default async function EditRegistersPage({
                   <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-secondary"><Store className="size-4" aria-hidden="true" /></span>
                   <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h3 className="truncate text-sm font-semibold">{register.name}</h3><span className={cn("rounded-full px-2 py-1 text-[9px] font-semibold", register.active ? "bg-chart-1/10 text-chart-1" : "bg-muted text-muted-foreground")}>{register.active ? "ACTIVE" : "ARCHIVED"}</span>{hasOpenShift ? <span className="rounded-full bg-primary px-2 py-1 text-[9px] font-semibold text-primary-foreground">OPEN SHIFT</span> : null}</div><p className="mt-1 font-mono text-[10px] text-muted-foreground">{register.code} · {register.purpose === "RESTAURANT" ? "Restaurant" : "Shop"}</p></div>
                 </div>
-                {register.active ? <Link href={`/registers/${register.id}`} prefetch={false} className="flex h-9 w-fit items-center gap-1.5 rounded-lg border border-border px-3 text-[11px] font-semibold">Open register<ExternalLink className="size-3.5" aria-hidden="true" /></Link> : null}
+                {register.active && can(authorization, "REGISTERS_VIEW") ? <Link href={`/registers/${register.id}`} prefetch={false} className="flex h-9 w-fit items-center gap-1.5 rounded-lg border border-border px-3 text-[11px] font-semibold">Open register<ExternalLink className="size-3.5" aria-hidden="true" /></Link> : null}
               </header>
 
               <div className="grid gap-2 text-[10px] text-muted-foreground sm:grid-cols-4">
                 <span>{register._count.shifts} shifts</span><span>{register._count.products} products</span><span>{register._count.menuItems} menu items</span><span>{register._count.restaurantTables} tables</span>
               </div>
 
-              {canEdit ? <form action={updateRegisterAction.bind(null, register.id)} className="grid gap-3 rounded-xl bg-accent p-4 sm:grid-cols-3 sm:items-end">
+              <div className="grid gap-3 rounded-xl bg-accent p-4 sm:grid-cols-3 sm:items-end">
+              {can(authorization, "REGISTER_RENAME") ? <form action={renameRegisterAction.bind(null, register.id)} className="grid gap-2">
                 <label className="grid gap-1.5 text-[10px] text-muted-foreground">REGISTER NAME<input name="name" required maxLength={100} defaultValue={register.name} className={fieldClass} /></label>
+                <button type="submit" className="h-10 rounded-lg bg-primary px-4 text-xs font-semibold text-primary-foreground">Save name</button>
+              </form> : <p className="rounded-lg bg-background px-3 py-3 text-xs text-muted-foreground">No rename permission.</p>}
+              {can(authorization, "REGISTER_TYPE_CHANGE") ? <form action={changeRegisterTypeAction.bind(null, register.id)} className="grid gap-2">
                 <label className="grid gap-1.5 text-[10px] text-muted-foreground">TYPE<select name="purpose" defaultValue={register.purpose} disabled={!canChangePurpose} className={fieldClass}><option value="SHOP">Shop</option><option value="RESTAURANT">Restaurant</option></select>{!canChangePurpose ? <input type="hidden" name="purpose" value={register.purpose} /> : null}</label>
+                <button type="submit" disabled={!canChangePurpose} className="h-10 rounded-lg border border-border bg-background px-4 text-xs font-semibold disabled:opacity-50">Save type</button>
+              </form> : <p className="rounded-lg bg-background px-3 py-3 text-xs text-muted-foreground">No type-change permission.</p>}
+              {can(authorization, "REGISTER_ARCHIVE") ? <form action={setRegisterActiveAction.bind(null, register.id)} className="grid gap-2">
                 <label className="grid gap-1.5 text-[10px] text-muted-foreground">STATUS<select name="status" defaultValue={register.active ? "ACTIVE" : "ARCHIVED"} disabled={hasOpenShift} className={fieldClass}><option value="ACTIVE">Active</option><option value="ARCHIVED">Archived</option></select>{hasOpenShift ? <input type="hidden" name="status" value="ACTIVE" /> : null}</label>
-                <div className="flex flex-col gap-2 sm:col-span-3 sm:flex-row sm:items-center sm:justify-between"><p className="text-[10px] text-muted-foreground">{canChangePurpose ? "Type can be changed until the register is used." : "Type is locked because this register has operational data."}</p><button type="submit" className="h-10 rounded-lg bg-primary px-4 text-xs font-semibold text-primary-foreground">Save changes</button></div>
-              </form> : <p className="rounded-lg bg-accent px-4 py-3 text-xs text-muted-foreground">View only. Register edit permission is required to make changes.</p>}
+                <button type="submit" disabled={hasOpenShift} className="h-10 rounded-lg border border-border bg-background px-4 text-xs font-semibold disabled:opacity-50">Save status</button>
+              </form> : <p className="rounded-lg bg-background px-3 py-3 text-xs text-muted-foreground">No archive permission.</p>}
+              </div>
 
-              {canEdit ? <details className="rounded-lg border border-destructive/25 p-4">
+              {can(authorization, "REGISTER_DELETE") ? <details className="rounded-lg border border-destructive/25 p-4">
                 <summary className="cursor-pointer text-xs font-semibold text-destructive">Delete register</summary>
                 {canDelete ? <form action={deleteRegisterAction.bind(null, register.id)} className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end"><label className="grid gap-1.5 text-[10px] text-muted-foreground">ENTER “{register.name}” TO CONFIRM<input name="confirmationName" required autoComplete="off" className={fieldClass} /></label><button type="submit" className="flex h-10 items-center justify-center gap-2 rounded-lg bg-destructive px-4 text-xs font-semibold text-destructive-foreground"><Trash2 className="size-3.5" aria-hidden="true" />Delete permanently</button></form> : <p className="mt-3 text-[11px] leading-5 text-muted-foreground">This register has operational data and cannot be deleted. Archive it to remove it from active register selection while preserving its history.</p>}
               </details> : null}

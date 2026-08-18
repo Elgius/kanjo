@@ -26,9 +26,9 @@ export type SessionTransaction = {
   }>;
 };
 
-export async function getSessionRegisters() {
+export async function getSessionRegisters(authorizedRegisterIds: readonly string[] | null = null) {
   const registers = await prisma.cashRegister.findMany({
-    where: { active: true },
+    where: { active: true, ...(authorizedRegisterIds ? { id: { in: Array.from(authorizedRegisterIds) } } : {}) },
     orderBy: { name: "asc" },
     select: {
       id: true,
@@ -60,8 +60,9 @@ export async function getSessionRegisters() {
   };
 }
 
-export async function getRegisterSessions(registerId: string) {
+export async function getRegisterSessions(registerId: string, authorizedRegisterIds: readonly string[] | null = null) {
   if (!uuidPattern.test(registerId)) return null;
+  if (authorizedRegisterIds && !authorizedRegisterIds.includes(registerId)) return null;
 
   const register = await prisma.cashRegister.findFirst({
     where: { id: registerId, active: true },
@@ -131,8 +132,9 @@ export async function getRegisterSessions(registerId: string) {
   };
 }
 
-export async function getRegisterSession(registerId: string, sessionId: string) {
+export async function getRegisterSession(registerId: string, sessionId: string, authorizedRegisterIds: readonly string[] | null = null) {
   if (!uuidPattern.test(registerId) || !uuidPattern.test(sessionId)) return null;
+  if (authorizedRegisterIds && !authorizedRegisterIds.includes(registerId)) return null;
 
   const session = await prisma.registerShift.findFirst({
     where: { id: sessionId, registerId, register: { active: true } },

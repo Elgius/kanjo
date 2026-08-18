@@ -6,6 +6,33 @@ All notable changes to Kanjo are documented in this file.
 
 ### Added
 
+#### Capability-based authorization
+
+- Replaced broad page-level mutation authorization with individual capabilities for every read area and business action.
+- Added grouped read, register-administration, shift, transaction, restaurant, inventory, customer, settings, and global audit-log capabilities.
+- Added role-level register scope with All registers and Selected registers modes.
+- Added explicit per-role register assignments for selected-register roles.
+- Added centralized `can`, register-scope, capability, entity, shift-owner, and audited denial helpers.
+- Added a single operation-policy registry that maps each business mutation and audit event to exactly one capability and scope.
+- Added trusted entity-to-register resolution for shifts, products, batches, held orders, menu items, restaurant tables, and customer-credit bills.
+- Added shift-owner enforcement for sales, physical holds, held-bill cancellation, customer-credit issuance, shift closure, and customer-credit settlement.
+- Added `SHIFT_OVERRIDE` as an ownership override that never substitutes for the underlying operation capability.
+- Retained unrestricted authorization and register-scope bypass for site administrators.
+- Added editable Cashier, Shift Manager, Inventory Clerk, Auditor, and Full Access role presets.
+- Added a grouped capability editor with Global/Register scope labels, all/selected register controls, and per-register assignments.
+- Added automatic mutation-to-view dependency expansion and validation requiring at least one register for selected-scope operational roles.
+- Prevented selected-register roles from receiving global register-creation permission.
+
+#### Scoped data access
+
+- Applied authorized register IDs directly to overview, register sidebar, register selection, register detail, sessions, inventory, stock, bill-history, and customer-credit queries.
+- Added not-found behavior for direct register and entity pages outside a role's assigned register scope.
+- Rejected unauthorized register filter values rather than ignoring or broadening them.
+- Kept customer profiles and global outstanding/available-credit totals visible independently of register scope.
+- Limited customer credit-bill rows, paid history, and settlement controls to bills from assigned registers.
+- Kept global audit-log access independent from register scope through `AUDIT_LOG_VIEW_ALL`.
+- Updated every navigation item, Registers tree child, form, action button, hold option, settlement control, and management control to use its exact capability.
+
 #### Register navigation and session history
 
 - Converted Registers in the application sidebar into an expandable file tree.
@@ -88,6 +115,11 @@ All notable changes to Kanjo are documented in this file.
 
 ### Changed
 
+- Split combined register editing into independently authorized rename, type-change, archive/restore, and delete actions.
+- Split customer profile editing from credit-limit changes so each operation has a distinct capability and audit event.
+- Replaced the legacy role radio matrix with capability checkboxes and register-scope configuration.
+- Updated role writes to maintain a coarse legacy `role_permissions` projection for rollback compatibility during the additive rollout.
+- Updated the Full Access seed role to receive every capability with all-register scope.
 - Centralized restaurant sale preparation so normal sales and customer-credit issuance share item resolution, recipe expansion, stock requirements, and deductions.
 - Extended physical held-order serialization to support both recipe menu items and standalone ingredient products.
 - Updated register refresh behavior to invalidate customer, restaurant, inventory, stock, bill-history, session, sidebar, and overview data affected by each workflow.
@@ -96,6 +128,12 @@ All notable changes to Kanjo are documented in this file.
 
 ### Database
 
+- Added `CapabilityKey` and `RegisterScopeMode` database enums.
+- Added `role_capabilities` and `role_register_access` tables with cascading role cleanup and indexed capability/register lookups.
+- Added `registerScopeMode` to roles, backfilling every existing role to All registers so current and future register access is preserved.
+- Added an access-preserving legacy translation from every existing VIEW/EDIT page grant to equivalent read and mutation capabilities.
+- Granted the built-in Full Access role every capability during migration.
+- Retained `PermissionLevel` and `role_permissions` for the compatibility window; removal is deferred to a later verified cleanup release.
 - Added restaurant table storage, table-to-held-order assignment, seat validation, and a partial unique index for table occupancy.
 - Added customer accounts and customer-credit bills with issued/settled shift attribution, payment linkage, status constraints, and supporting indexes.
 - Added customer-credit references to inventory movements.
@@ -113,6 +151,9 @@ All notable changes to Kanjo are documented in this file.
 
 ### Validation and testing
 
+- Added unit coverage for dependency expansion, site-admin bypass, all/selected scope, future-register behavior, preset contents, legacy translation, and rollback projection.
+- Added policy-coverage verification for every business mutation event.
+- Added dedicated-database integration coverage proving selected-register inventory and session queries exclude cross-register data and do not inherit later registers.
 - Added validation for customer details, credit limits, credit settlement payment methods, restaurant tables, register editing, controlled menu categories, and standalone recipe ingredients.
 - Added integration coverage for restaurant table occupancy and release.
 - Added integration coverage for immediate customer-credit stock deduction, credit-limit blocking, later settlement, and prevention of duplicate stock movement.
@@ -123,5 +164,7 @@ All notable changes to Kanjo are documented in this file.
 
 ### Deployment notes
 
+- Apply additive migration `20260817140000_capability_permissions` before deploying this application version. It preserves all legacy permission rows for rollback compatibility.
+- Verify representative cashier, manager, inventory, auditor, and custom roles in production before scheduling the later legacy-permission cleanup migration.
 - Apply migrations `20260817120000_restaurant_tables`, `20260817130000_customers_credit`, `20260817131000_customers_permissions`, and `20260817132000_standalone_menu_ingredients` before deploying the application code.
 - Database-backed integration tests require a dedicated `TEST_NEON_DB`; production database fallback remains intentionally disabled.

@@ -17,10 +17,23 @@ export type InventoryFilters = {
   page?: number;
 };
 
-export async function getInventoryData(filters: InventoryFilters = {}) {
+function scopedRegisterWhere(registerIds: readonly string[] | null) {
+  return registerIds ? { in: Array.from(registerIds) } : undefined;
+}
+
+function assertAuthorizedRegisterFilter(registerId: string | null | undefined, registerIds: readonly string[] | null) {
+  if (registerId && registerIds && !registerIds.includes(registerId)) {
+    throw new Error("UNAUTHORIZED_REGISTER_FILTER");
+  }
+}
+
+export async function getInventoryData(filters: InventoryFilters = {}, authorizedIds: readonly string[] | null = null) {
+  const scopedIds = scopedRegisterWhere(authorizedIds);
+  const requestedRegisterId = filters.register && filters.register !== "all" ? filters.register : null;
+  assertAuthorizedRegisterFilter(requestedRegisterId, authorizedIds);
   const [rawProducts, batchBalances, registers, categoryRecords] = await Promise.all([
     prisma.product.findMany({
-      where: { active: true },
+      where: { active: true, ...(scopedIds ? { registerId: scopedIds } : {}) },
       orderBy: { updatedAt: "desc" },
       select: {
         id: true,
@@ -44,17 +57,25 @@ export async function getInventoryData(filters: InventoryFilters = {}) {
     }),
     prisma.inventoryBatch.groupBy({
       by: ["productId"],
-      where: { remainingQuantity: { gt: 0 }, product: { active: true } },
+      where: { remainingQuantity: { gt: 0 }, product: { active: true }, ...(scopedIds ? { registerId: scopedIds } : {}) },
       _sum: { remainingQuantity: true },
     }),
     prisma.cashRegister.findMany({
-      where: { active: true },
+      where: { active: true, ...(scopedIds ? { id: scopedIds } : {}) },
       orderBy: { name: "asc" },
       select: { id: true, code: true, name: true, purpose: true },
     }),
     prisma.productCategory.findMany({
       orderBy: { name: "asc" },
-      select: { id: true, name: true, _count: { select: { products: true } } },
+      select: {
+        id: true,
+        name: true,
+        _count: {
+          select: {
+            products: scopedIds ? { where: { registerId: scopedIds } } : true,
+          },
+        },
+      },
     }),
   ]);
   const balanceByProduct = new Map(
@@ -150,24 +171,26 @@ export type StockFilters = {
   movement?: "all" | InventoryMovementType;
 };
 
-async function getStockDataExhaustive(filters: StockFilters = {}) {
+async function getStockDataExhaustive(filters: StockFilters = {}, authorizedIds: readonly string[] | null = null) {
   const registerId = filters.register && filters.register !== "all" ? filters.register : undefined;
+  assertAuthorizedRegisterFilter(registerId, authorizedIds);
+  const scopedIds = scopedRegisterWhere(authorizedIds);
   const query = filters.query?.trim();
   const movementType = filters.movement && filters.movement !== "all"
     ? filters.movement
     : undefined;
   const productWhere: Prisma.ProductWhereInput = {
     active: true,
-    ...(registerId ? { registerId } : {}),
+    ...(registerId ? { registerId } : scopedIds ? { registerId: scopedIds } : {}),
   };
   const movementWhere: Prisma.InventoryMovementWhereInput = {
-    ...(registerId ? { registerId } : {}),
+    ...(registerId ? { registerId } : scopedIds ? { registerId: scopedIds } : {}),
     ...(movementType ? { type: movementType } : {}),
   };
 
   const [registers, unfilteredProducts, unfilteredMovements, unfilteredMovementCount] = await Promise.all([
     prisma.cashRegister.findMany({
-      where: { active: true },
+      where: { active: true, ...(scopedIds ? { id: scopedIds } : {}) },
       orderBy: { name: "asc" },
       select: { id: true, code: true, name: true },
     }),
@@ -392,8 +415,10 @@ function hydrateStockPayload(payload: StockDatabasePayload) {
   };
 }
 
-export async function getStockData(filters: StockFilters = {}) {
+export async function getStockData(filters: StockFilters = {}, authorizedIds: readonly string[] | null = null) {
   const registerId = filters.register && filters.register !== "all" ? filters.register : null;
+  assertAuthorizedRegisterFilter(registerId, authorizedIds);
+  if (authorizedIds) return getStockDataExhaustive(filters, authorizedIds);
   const query = filters.query?.trim() || null;
   const movementType = filters.movement && filters.movement !== "all"
     ? filters.movement
@@ -498,9 +523,10 @@ export async function getStockData(filters: StockFilters = {}) {
   };
 }
 
-export const getRegisterSummaries = cache(async () => {
+export const getRegisterSummaries = cache(async (authorizedIds: readonly string[] | null = null) => {
+  const scopedIds = scopedRegisterWhere(authorizedIds);
   const registers = await prisma.cashRegister.findMany({
-    where: { active: true },
+    where: { active: true, ...(scopedIds ? { id: scopedIds } : {}) },
     orderBy: { name: "asc" },
     select: {
       id: true,
@@ -515,7 +541,7 @@ export const getRegisterSummaries = cache(async () => {
           id: true,
           openingCashLaari: true,
           openedAt: true,
-          openedBy: { select: { name: true } },
+          openedBy: { select: { id: true, name: true } },
         },
       },
     },
@@ -745,8 +771,9 @@ async function getSellableItems(register: { id: string; purpose: string }): Prom
   return [];
 }
 
-export async function getRegistersData(selectedRegisterId?: string) {
-  const registers = await getRegisterSummaries();
+export async function getRegistersData(selectedRegisterId?: string, authorizedIds: readonly string[] | null = null) {
+  assertAuthorizedRegisterFilter(selectedRegisterId, authorizedIds);
+  const registers = await getRegisterSummaries(authorizedIds);
   const selected =
     registers.find((register) => register.id === selectedRegisterId) ??
     registers.find((register) => register.shifts.length > 0) ??
@@ -791,8 +818,9 @@ export async function getRegistersData(selectedRegisterId?: string) {
   };
 }
 
-export async function getRegisterManagementData(registerId: string, receiptId?: string) {
-  const registers = await getRegisterSummaries();
+export async function getRegisterManagementData(registerId: string, receiptId?: string, authorizedIds: readonly string[] | null = null) {
+  assertAuthorizedRegisterFilter(registerId, authorizedIds);
+  const registers = await getRegisterSummaries(authorizedIds);
   const register = registers.find((candidate) => candidate.id === registerId) ?? null;
   if (!register) return null;
 
@@ -903,8 +931,8 @@ export async function getRegisterManagementData(registerId: string, receiptId?: 
   };
 }
 
-export async function getSidebarRegisters() {
-  const registers = await getRegisterSummaries();
+export async function getSidebarRegisters(authorizedIds: readonly string[] | null = null) {
+  const registers = await getRegisterSummaries(authorizedIds);
   return registers.map((register) => {
     const shift = register.shifts[0];
     return {
@@ -917,14 +945,16 @@ export async function getSidebarRegisters() {
   });
 }
 
-export async function getOverviewData() {
+export async function getOverviewData(authorizedIds: readonly string[] | null = null) {
+  const scopedIds = scopedRegisterWhere(authorizedIds);
+  const saleScope = scopedIds ? { registerShift: { registerId: scopedIds } } : {};
   const today = getBusinessDayRange();
   const yesterday = shiftRange(today, -1);
   const lastWeek = shiftRange(today, -7);
 
   const [todaySales, yesterdaySales, lastWeekSales, todayRefunds, registers] = await Promise.all([
     prisma.sale.findMany({
-      where: { status: "COMPLETED", createdAt: { gte: today.start, lt: today.end } },
+      where: { status: "COMPLETED", createdAt: { gte: today.start, lt: today.end }, ...saleScope },
       select: {
         totalLaari: true,
         createdAt: true,
@@ -941,20 +971,20 @@ export async function getOverviewData() {
       },
     }),
     prisma.sale.aggregate({
-      where: { status: "COMPLETED", createdAt: { gte: yesterday.start, lt: yesterday.end } },
+      where: { status: "COMPLETED", createdAt: { gte: yesterday.start, lt: yesterday.end }, ...saleScope },
       _sum: { totalLaari: true },
       _count: { _all: true },
     }),
     prisma.sale.findMany({
-      where: { status: "COMPLETED", createdAt: { gte: lastWeek.start, lt: lastWeek.end } },
+      where: { status: "COMPLETED", createdAt: { gte: lastWeek.start, lt: lastWeek.end }, ...saleScope },
       select: { totalLaari: true, createdAt: true },
     }),
     prisma.sale.aggregate({
-      where: { status: "REFUNDED", refundedAt: { gte: today.start, lt: today.end } },
+      where: { status: "REFUNDED", refundedAt: { gte: today.start, lt: today.end }, ...saleScope },
       _sum: { totalLaari: true },
       _count: { _all: true },
     }),
-    getRegisterSummaries(),
+    getRegisterSummaries(authorizedIds),
   ]);
 
   const netSalesLaari = todaySales.reduce((sum, sale) => sum + sale.totalLaari, 0);

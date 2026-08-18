@@ -6,7 +6,12 @@ import { redirect } from "next/navigation";
 
 import { prisma } from "@/lib/db";
 import { getAuditRequestContext, safeWriteAudit, writeAudit } from "@/lib/audit";
-import { requireActionAccess, type AuthorizationContext } from "@/lib/authorization";
+import {
+  requireEntityOperation,
+  requireGlobalOperation,
+  requireRegisterOperation,
+  type AuthorizationContext,
+} from "@/lib/authorization";
 import { maldivesDate, measured, measuredPerStockUnit } from "@/lib/pos/inventory";
 import { createProductWithGeneratedSku } from "@/lib/pos/products";
 import { assignBatchExpiry, PosError, receiveInventory, writeOffBatch } from "@/lib/pos/sales";
@@ -47,8 +52,8 @@ async function auditFailure(
 }
 
 export async function createProductAction(formData: FormData) {
-  const authorization = await requireActionAccess("INVENTORY", "PRODUCT_CREATE");
   const parsed = parseProductForm(formData);
+  const authorization = await requireRegisterOperation("PRODUCT_CREATE", String(formData.get("registerId") ?? ""));
   if (!parsed.ok) {
     await auditFailure(authorization, "PRODUCT_CREATE", parsed.error);
     inventoryRedirect("error", parsed.error);
@@ -134,7 +139,7 @@ export async function createProductAction(formData: FormData) {
 }
 
 export async function updateProductAction(productId: string, formData: FormData) {
-  const authorization = await requireActionAccess("INVENTORY", "PRODUCT_UPDATE");
+  const { authorization } = await requireEntityOperation("PRODUCT_UPDATE", "product", productId);
   const parsed = parseProductUpdateForm(formData);
   if (!parsed.ok) {
     await auditFailure(authorization, "PRODUCT_UPDATE", parsed.error, { productId });
@@ -179,7 +184,7 @@ export async function updateProductAction(productId: string, formData: FormData)
 }
 
 export async function deleteProductAction(productId: string) {
-  const authorization = await requireActionAccess("INVENTORY", "PRODUCT_DELETE");
+  const { authorization } = await requireEntityOperation("PRODUCT_DELETE", "product", productId);
   try {
     const request = await getAuditRequestContext();
     await prisma.$transaction(async (tx) => {
@@ -210,7 +215,7 @@ export async function deleteProductAction(productId: string) {
 }
 
 export async function createCategoryAction(formData: FormData) {
-  const authorization = await requireActionAccess("INVENTORY", "CATEGORY_CREATE");
+  const authorization = await requireGlobalOperation("CATEGORY_CREATE");
   const parsed = parseCategoryForm(formData);
   if (!parsed.ok) inventoryRedirect("error", parsed.error);
   try {
@@ -227,7 +232,7 @@ export async function createCategoryAction(formData: FormData) {
 }
 
 export async function updateCategoryAction(categoryId: string, formData: FormData) {
-  const authorization = await requireActionAccess("INVENTORY", "CATEGORY_UPDATE");
+  const authorization = await requireGlobalOperation("CATEGORY_UPDATE");
   const parsed = parseCategoryForm(formData);
   if (!parsed.ok) inventoryRedirect("error", parsed.error);
   try {
@@ -250,7 +255,7 @@ export async function updateCategoryAction(categoryId: string, formData: FormDat
 }
 
 export async function deleteCategoryAction(categoryId: string) {
-  const authorization = await requireActionAccess("INVENTORY", "CATEGORY_DELETE");
+  const authorization = await requireGlobalOperation("CATEGORY_DELETE");
   try {
     const category = await prisma.productCategory.findUnique({ where: { id: categoryId }, select: { name: true } });
     if (!category) throw new PosError("Category not found.");
@@ -270,10 +275,10 @@ export async function deleteCategoryAction(categoryId: string) {
 }
 
 export async function receiveStockAction(productId: string, formData: FormData) {
-  const authorization = await requireActionAccess("INVENTORY", "STOCK_ADJUST");
+  const { authorization } = await requireEntityOperation("STOCK_RECEIVE", "product", productId);
   const parsed = parseReceiveStock(formData);
   if (!parsed.ok) {
-    await auditFailure(authorization, "STOCK_ADJUST", parsed.error, { productId });
+    await auditFailure(authorization, "STOCK_RECEIVE", parsed.error, { productId });
     inventoryRedirect("error", parsed.error);
   }
 
@@ -289,7 +294,7 @@ export async function receiveStockAction(productId: string, formData: FormData) 
     });
   } catch (error) {
     const message = error instanceof PosError ? error.message : "Stock could not be received.";
-    await auditFailure(authorization, "STOCK_ADJUST", message, { productId });
+    await auditFailure(authorization, "STOCK_RECEIVE", message, { productId });
     inventoryRedirect("error", message);
   }
 
@@ -298,7 +303,7 @@ export async function receiveStockAction(productId: string, formData: FormData) 
 }
 
 export async function assignBatchExpiryAction(batchId: string, formData: FormData) {
-  const authorization = await requireActionAccess("INVENTORY", "STOCK_ADJUST");
+  const { authorization } = await requireEntityOperation("BATCH_EXPIRY_SET", "batch", batchId);
   const parsed = parseBatchExpiry(formData);
   if (!parsed.ok) inventoryRedirect("error", parsed.error);
   try {
@@ -311,7 +316,7 @@ export async function assignBatchExpiryAction(batchId: string, formData: FormDat
 }
 
 export async function writeOffBatchAction(batchId: string, formData: FormData) {
-  const authorization = await requireActionAccess("INVENTORY", "STOCK_ADJUST");
+  const { authorization } = await requireEntityOperation("BATCH_WRITE_OFF", "batch", batchId);
   const parsed = parseBatchWriteOff(formData);
   if (!parsed.ok) inventoryRedirect("error", parsed.error);
   try {

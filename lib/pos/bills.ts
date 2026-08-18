@@ -74,9 +74,13 @@ function maldivesBoundary(date: string, time: string, end: boolean) {
   return Number.isNaN(value.getTime()) ? undefined : value;
 }
 
-function billWhere(rawFilters: BillHistoryFilters): Prisma.BillWhereInput {
+function billWhere(rawFilters: BillHistoryFilters, authorizedRegisterIds: readonly string[] | null): Prisma.BillWhereInput {
   const filters = sanitizeBillFilters(rawFilters);
+  if (filters.registerId && authorizedRegisterIds && !authorizedRegisterIds.includes(filters.registerId)) {
+    throw new Error("UNAUTHORIZED_REGISTER_FILTER");
+  }
   const AND: Prisma.BillWhereInput[] = [];
+  if (authorizedRegisterIds) AND.push({ registerId: { in: Array.from(authorizedRegisterIds) } });
   if (filters.registerId) AND.push({ registerId: filters.registerId });
   if (filters.paymentMethod) AND.push({ paymentMethod: filters.paymentMethod });
 
@@ -150,8 +154,9 @@ function serializeBill(bill: {
 export async function getBillHistoryPage(
   rawFilters: BillHistoryFilters,
   cursor?: BillCursor | null,
+  authorizedRegisterIds: readonly string[] | null = null,
 ): Promise<BillHistoryPage> {
-  const where = billWhere(rawFilters);
+  const where = billWhere(rawFilters, authorizedRegisterIds);
   const cursorDate = cursor ? new Date(cursor.soldAt) : null;
   const cursorWhere: Prisma.BillWhereInput | undefined = cursor && cursorDate && !Number.isNaN(cursorDate.getTime()) && uuidPattern.test(cursor.id)
     ? {
@@ -176,13 +181,14 @@ export async function getBillHistoryPage(
   };
 }
 
-export async function getBillHistoryOverview(rawFilters: BillHistoryFilters) {
+export async function getBillHistoryOverview(rawFilters: BillHistoryFilters, authorizedRegisterIds: readonly string[] | null = null) {
   const filters = sanitizeBillFilters(rawFilters);
-  const where = billWhere(filters);
+  const where = billWhere(filters, authorizedRegisterIds);
   const [page, aggregate, registers] = await Promise.all([
-    getBillHistoryPage(filters),
+    getBillHistoryPage(filters, null, authorizedRegisterIds),
     prisma.bill.aggregate({ where, _count: true, _sum: { totalLaari: true } }),
     prisma.cashRegister.findMany({
+      where: authorizedRegisterIds ? { id: { in: Array.from(authorizedRegisterIds) } } : undefined,
       orderBy: [{ active: "desc" }, { name: "asc" }],
       select: { id: true, name: true, code: true, active: true },
     }),

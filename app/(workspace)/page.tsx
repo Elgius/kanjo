@@ -15,6 +15,8 @@ import { formatMvr } from "@/lib/pos/money";
 import { getOverviewData } from "@/lib/pos/queries";
 import {
   auditPageDenial,
+  authorizedRegisterIds,
+  can,
   canAccess,
   firstAccessiblePath,
   requireAuthorization,
@@ -35,7 +37,7 @@ export default async function DashboardPage() {
     redirect(firstAccessiblePath(authorization) ?? "/access-denied");
   }
   const user = authorization.user;
-  const data = await getOverviewData();
+  const data = await getOverviewData(authorizedRegisterIds(authorization));
   const todayLabel = new Intl.DateTimeFormat("en-MV", {
     timeZone: "Indian/Maldives",
     weekday: "long",
@@ -48,7 +50,7 @@ export default async function DashboardPage() {
       <PageHeader
         eyebrow={todayLabel}
         title={`Good morning, ${user.name.split(/\s+/)[0]}.`}
-        actions={canAccess(authorization, "REGISTERS") ? (
+        actions={can(authorization, "REGISTERS_VIEW") ? (
           <Link prefetch={false} href="/registers" className="inline-flex h-10 items-center justify-center rounded-lg bg-primary px-4 text-xs font-semibold text-primary-foreground hover:bg-primary/90">New sale</Link>
         ) : null}
       />
@@ -79,7 +81,7 @@ export default async function DashboardPage() {
 
       <section className="grid gap-3.5 xl:grid-cols-[minmax(0,714px)_1fr]">
         <Surface className="min-h-[186px] p-[18px_20px]">
-          <div className="mb-3 flex justify-between"><h2 className="text-sm font-semibold">Top products</h2>{canAccess(authorization, "INVENTORY") ? <Link prefetch={false} href="/inventory" className="text-[11px] text-muted-foreground hover:text-foreground">View inventory →</Link> : null}</div>
+          <div className="mb-3 flex justify-between"><h2 className="text-sm font-semibold">Top products</h2>{can(authorization, "INVENTORY_VIEW") ? <Link prefetch={false} href="/inventory" className="text-[11px] text-muted-foreground hover:text-foreground">View inventory →</Link> : null}</div>
           {data.topProducts.length ? (
             <Table className="min-w-[560px] text-left text-xs"><TableHeader><TableRow className="hover:bg-transparent"><TableHead className="h-7 w-[320px] p-0 text-[10px] font-normal text-muted-foreground">PRODUCT</TableHead><TableHead className="h-7 w-[100px] p-0 text-[10px] font-normal text-muted-foreground">UNITS</TableHead><TableHead className="h-7 p-0 text-right text-[10px] font-normal text-muted-foreground">SALES</TableHead></TableRow></TableHeader><TableBody>{data.topProducts.map((product) => <TableRow key={product.name} className="h-[30px] border-0 hover:bg-transparent"><TableCell className="p-0 font-medium">{product.name}</TableCell><TableCell className="p-0">{product.units}</TableCell><TableCell className="p-0 text-right font-mono">{formatMvr(product.salesLaari)}</TableCell></TableRow>)}</TableBody></Table>
           ) : <p className="py-10 text-center text-xs text-muted-foreground">No product sales today.</p>}
@@ -87,7 +89,7 @@ export default async function DashboardPage() {
 
         <Surface className="min-h-[186px] p-[18px_20px]">
           <div className="mb-3.5 flex justify-between"><h2 className="text-sm font-semibold">Register pulse</h2><span className="text-[11px] text-muted-foreground">{data.registerPulse.length} open</span></div>
-          {data.registerPulse.length ? <div className="flex flex-col gap-3.5">{data.registerPulse.map((register) => canAccess(authorization, "REGISTERS") ? <Link prefetch={false} href={`/registers?register=${register.id}`} key={register.id} className="grid grid-cols-[1fr_78px_auto] items-center text-xs hover:underline"><span>{register.name}</span><span className="text-chart-1">● Open</span><span className="text-right font-mono">{formatMvr(register.salesLaari)}</span></Link> : <div key={register.id} className="grid grid-cols-[1fr_78px_auto] items-center text-xs"><span>{register.name}</span><span className="text-chart-1">● Open</span><span className="text-right font-mono">{formatMvr(register.salesLaari)}</span></div>)}</div> : <p className="py-10 text-center text-xs text-muted-foreground">No open registers.</p>}
+          {data.registerPulse.length ? <div className="flex flex-col gap-3.5">{data.registerPulse.map((register) => can(authorization, "REGISTERS_VIEW") ? <Link prefetch={false} href={`/registers?register=${register.id}`} key={register.id} className="grid grid-cols-[1fr_78px_auto] items-center text-xs hover:underline"><span>{register.name}</span><span className="text-chart-1">● Open</span><span className="text-right font-mono">{formatMvr(register.salesLaari)}</span></Link> : <div key={register.id} className="grid grid-cols-[1fr_78px_auto] items-center text-xs"><span>{register.name}</span><span className="text-chart-1">● Open</span><span className="text-right font-mono">{formatMvr(register.salesLaari)}</span></div>)}</div> : <p className="py-10 text-center text-xs text-muted-foreground">No open registers.</p>}
         </Surface>
       </section>
     </PageContainer>

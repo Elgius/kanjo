@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { notFound } from "next/navigation";
 import { ArrowDown, ArrowUp, Search } from "lucide-react";
 
 import { MetricCard, PageContainer, PageHeader, Surface } from "@/components/pos/primitives";
@@ -14,7 +15,7 @@ import { formatMvr } from "@/lib/pos/money";
 import { dateOnly, formatQuantity, maldivesDate, quantityNumber } from "@/lib/pos/inventory";
 import { getStockData, type StockFilters } from "@/lib/pos/queries";
 import { cn } from "@/lib/utils";
-import { requirePageAccess } from "@/lib/authorization";
+import { authorizedRegisterIds, canAccessRegister, requireCapability } from "@/lib/authorization";
 
 const fieldClass =
   "h-11 rounded-lg border border-border bg-card px-3 text-xs outline-none focus:border-ring focus:ring-2 focus:ring-ring/15";
@@ -43,7 +44,7 @@ const movementLabels = {
 } as const;
 
 export default async function StockPage({ searchParams }: PageProps<"/stock">) {
-  await requirePageAccess("STOCK");
+  const authorization = await requireCapability("STOCK_VIEW", "STOCK_PAGE");
   const params = await searchParams;
   const rawMovement = single(params.movement);
   const filters: StockFilters = {
@@ -53,7 +54,8 @@ export default async function StockPage({ searchParams }: PageProps<"/stock">) {
       ? (rawMovement as StockFilters["movement"])
       : "all",
   };
-  const data = await getStockData(filters);
+  if (filters.register && filters.register !== "all" && !canAccessRegister(authorization, filters.register)) notFound();
+  const data = await getStockData(filters, authorizedRegisterIds(authorization));
 
   return (
     <PageContainer className="gap-[22px]">

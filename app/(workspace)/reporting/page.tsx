@@ -2,14 +2,14 @@ import type { Metadata } from "next";
 import Image from "next/image";
 
 import { PageContainer } from "@/components/pos/primitives";
-import { requirePageAccess } from "@/lib/authorization";
+import { requireCapability } from "@/lib/authorization";
 
 export const metadata: Metadata = {
   title: "Reporting · Kanjo",
 };
 
 export default async function ReportingPage() {
-  await requirePageAccess("REPORTING");
+  await requireCapability("REPORTING_VIEW", "REPORTING_PAGE");
   return (
     <PageContainer className="min-h-[calc(100svh-3.5rem)] items-center justify-center py-12 md:min-h-svh">
       <section className="flex flex-col items-center text-center">

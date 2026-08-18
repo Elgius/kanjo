@@ -4,7 +4,7 @@ import { notFound } from "next/navigation";
 import { ArrowLeft, ArrowRight } from "lucide-react";
 
 import { MetricCard, PageContainer, PageHeader, Surface } from "@/components/pos/primitives";
-import { requirePageAccess } from "@/lib/authorization";
+import { authorizedRegisterIds, requireCapability } from "@/lib/authorization";
 import { formatMvr } from "@/lib/pos/money";
 import { getRegisterSessions } from "@/lib/pos/register-sessions";
 import { cn } from "@/lib/utils";
@@ -35,9 +35,9 @@ export default async function RegisterSessionHistoryPage({
 }: {
   params: Promise<{ registerId: string }>;
 }) {
-  await requirePageAccess("REGISTERS");
+  const authorization = await requireCapability("REGISTER_SESSIONS_VIEW", "REGISTER_SESSIONS_PAGE");
   const { registerId } = await params;
-  const register = await getRegisterSessions(registerId);
+  const register = await getRegisterSessions(registerId, authorizedRegisterIds(authorization));
   if (!register) notFound();
 
   const totalSales = register.shifts.reduce((total, shift) => total + shift.completedSalesLaari, 0);

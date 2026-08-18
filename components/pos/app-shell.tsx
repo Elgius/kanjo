@@ -18,17 +18,18 @@ type AppShellProps = {
     salesLaari: number;
   }>;
   allowedPages: PageKey[];
+  registerTree: { selection: boolean; sessions: boolean; edit: boolean };
   homeHref: string;
 };
 
-export function AppShell({ children, user, registers, allowedPages, homeHref }: AppShellProps) {
+export function AppShell({ children, user, registers, allowedPages, registerTree, homeHref }: AppShellProps) {
   return (
     <TooltipProvider>
       <SidebarProvider
         className="bg-background text-foreground"
         style={{ "--sidebar-width": "14.5rem" } as React.CSSProperties}
       >
-        <Sidebar user={user} registers={registers} allowedPages={allowedPages} homeHref={homeHref} />
+        <Sidebar user={user} registers={registers} allowedPages={allowedPages} registerTree={registerTree} homeHref={homeHref} />
         <SidebarInset className="min-w-0">
           <MobileHeader homeHref={homeHref} />
           <main className="min-w-0 flex-1">{children}</main>

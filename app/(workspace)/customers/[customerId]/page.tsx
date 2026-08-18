@@ -4,11 +4,11 @@ import { notFound } from "next/navigation";
 import { ArrowLeft, CreditCard, Mail, MapPin, Pencil, Phone, ReceiptText } from "lucide-react";
 
 import { MetricCard, PageContainer, PageHeader, Surface } from "@/components/pos/primitives";
-import { canAccess, requirePageAccess } from "@/lib/authorization";
+import { authorizedRegisterIds, can, requireCapability } from "@/lib/authorization";
 import { getCustomerDetail } from "@/lib/pos/customers";
 import { formatMvr } from "@/lib/pos/money";
 import { cn } from "@/lib/utils";
-import { settleCustomerCreditAction, updateCustomerAction } from "../actions";
+import { settleCustomerCreditAction, updateCustomerAction, updateCustomerCreditLimitAction } from "../actions";
 
 export const metadata: Metadata = { title: "Customer account · Kanjo" };
 
@@ -37,11 +37,14 @@ export default async function CustomerDetailPage({
   params: Promise<{ customerId: string }>;
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const authorization = await requirePageAccess("CUSTOMERS");
-  const canEdit = canAccess(authorization, "CUSTOMERS", "EDIT");
+  const authorization = await requireCapability("CUSTOMERS_VIEW", "CUSTOMER_DETAIL_PAGE");
+  const canEditProfile = can(authorization, "CUSTOMER_UPDATE");
+  const canEditLimit = can(authorization, "CUSTOMER_CREDIT_LIMIT_UPDATE");
+  const canViewCredit = can(authorization, "CUSTOMER_CREDIT_VIEW");
+  const canSettleCredit = can(authorization, "CUSTOMER_CREDIT_SETTLE");
   const { customerId } = await params;
   const query = await searchParams;
-  const customer = await getCustomerDetail(customerId);
+  const customer = await getCustomerDetail(customerId, authorizedRegisterIds(authorization), canViewCredit);
   if (!customer) notFound();
   const success = single(query.success);
   const error = single(query.error);
@@ -67,7 +70,7 @@ export default async function CustomerDetailPage({
           <Surface className="p-5">
             <div className="flex items-center justify-between gap-3">
               <h2 className="text-sm font-semibold">Customer details</h2>
-              {canEdit ? <Link href={`/customers/${customer.id}?edit=1#edit-account`} prefetch={false} className="flex h-9 items-center gap-1.5 rounded-lg border border-border px-3 text-[11px] font-semibold"><Pencil className="size-3.5" aria-hidden="true" />Edit</Link> : null}
+              {canEditProfile || canEditLimit ? <Link href={`/customers/${customer.id}?edit=1#edit-account`} prefetch={false} className="flex h-9 items-center gap-1.5 rounded-lg border border-border px-3 text-[11px] font-semibold"><Pencil className="size-3.5" aria-hidden="true" />Edit</Link> : null}
             </div>
             <div className="mt-4 grid gap-3 text-xs text-muted-foreground">
               <p className="flex gap-2"><Mail className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />{customer.email || "No email"}</p>
@@ -76,18 +79,21 @@ export default async function CustomerDetailPage({
             </div>
           </Surface>
 
-          {canEdit ? (
+          {canEditProfile || canEditLimit ? (
             <details id="edit-account" open={editing} className="scroll-mt-5 rounded-xl border border-border bg-card p-5">
               <summary className="cursor-pointer text-sm font-semibold">Edit account</summary>
+              {canEditProfile ? (
               <form action={updateCustomerAction.bind(null, customer.id)} className="mt-4 grid gap-3">
                 <label className="grid gap-1.5 text-[10px] text-muted-foreground">NAME<input name="name" required maxLength={100} defaultValue={customer.name} className={fieldClass} /></label>
                 <label className="grid gap-1.5 text-[10px] text-muted-foreground">EMAIL<input name="email" type="email" maxLength={254} defaultValue={customer.email ?? ""} className={fieldClass} /></label>
                 <label className="grid gap-1.5 text-[10px] text-muted-foreground">PHONE NUMBER<input name="phoneNumber" type="tel" maxLength={40} defaultValue={customer.phoneNumber ?? ""} className={fieldClass} /></label>
                 <label className="grid gap-1.5 text-[10px] text-muted-foreground">NATIONALITY<input name="nationality" required maxLength={80} defaultValue={customer.nationality} className={fieldClass} /></label>
-                <label className="grid gap-1.5 text-[10px] text-muted-foreground">CREDIT LIMIT (MVR)<input name="creditLimit" inputMode="decimal" required defaultValue={(customer.creditLimitLaari / 100).toFixed(2)} className={fieldClass} /></label>
+                <input type="hidden" name="creditLimit" value={(customer.creditLimitLaari / 100).toFixed(2)} />
                 <label className="grid gap-1.5 text-[10px] text-muted-foreground">ADDRESS<textarea name="address" maxLength={500} rows={3} defaultValue={customer.address ?? ""} className="rounded-lg border border-border bg-background p-3 text-xs outline-none" /></label>
                 <button type="submit" className="h-10 rounded-lg bg-primary px-4 text-xs font-semibold text-primary-foreground">Save account</button>
               </form>
+              ) : null}
+              {canEditLimit ? <form action={updateCustomerCreditLimitAction.bind(null, customer.id)} className="mt-4 grid gap-3 border-t border-border pt-4"><label className="grid gap-1.5 text-[10px] text-muted-foreground">CREDIT LIMIT (MVR)<input name="creditLimit" inputMode="decimal" required defaultValue={(customer.creditLimitLaari / 100).toFixed(2)} className={fieldClass} /></label><button type="submit" className="h-10 rounded-lg border border-border px-4 text-xs font-semibold">Save credit limit</button></form> : null}
             </details>
           ) : null}
         </div>
@@ -100,7 +106,7 @@ export default async function CustomerDetailPage({
                 <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start"><div><p className="font-mono text-[10px] text-muted-foreground">CREDIT · {bill.id.slice(0, 8).toUpperCase()}</p><h3 className="mt-1 text-sm font-semibold">{bill.register.name}</h3><p className="mt-1 text-[11px] text-muted-foreground">{formatDateTime(bill.issuedAt)} · {bill.createdBy.name}</p></div><p className="font-mono text-xl font-semibold">{formatMvr(bill.totalLaari)}</p></div>
                 <details><summary className="cursor-pointer text-[11px] font-semibold text-muted-foreground">View {bill.items.length} {bill.items.length === 1 ? "item" : "items"}</summary><div className="mt-3 grid gap-2 rounded-lg bg-accent p-3">{bill.items.map((item, index) => <div key={`${bill.id}:${index}`} className="flex justify-between gap-3 text-[11px]"><span>{item.quantity} × {item.productName}</span><span className="font-mono">{formatMvr(item.lineTotalLaari)}</span></div>)}</div></details>
                 {bill.note ? <p className="rounded-lg bg-accent px-3 py-2 text-[11px] text-muted-foreground">{bill.note}</p> : null}
-                {canEdit ? <form action={settleCustomerCreditAction.bind(null, customer.id, bill.id)} className="flex flex-col gap-2 border-t border-border pt-4 sm:flex-row sm:items-end sm:justify-end"><label className="grid gap-1 text-[9px] text-muted-foreground">PAYMENT METHOD<select name="paymentMethod" defaultValue="CASH" className={`${fieldClass} sm:w-36`}><option value="CASH">Cash</option><option value="CARD">Card</option><option value="MOBILE">Mobile pay</option></select></label><button type="submit" className="flex h-10 items-center justify-center gap-2 rounded-lg bg-chart-1 px-4 text-xs font-semibold text-white"><CreditCard className="size-3.5" aria-hidden="true" />Bill paid</button></form> : null}
+                {canSettleCredit && (bill.register.shifts[0]?.openedById === authorization.user.id || can(authorization, "SHIFT_OVERRIDE")) ? <form action={settleCustomerCreditAction.bind(null, customer.id, bill.id)} className="flex flex-col gap-2 border-t border-border pt-4 sm:flex-row sm:items-end sm:justify-end"><label className="grid gap-1 text-[9px] text-muted-foreground">PAYMENT METHOD<select name="paymentMethod" defaultValue="CASH" className={`${fieldClass} sm:w-36`}><option value="CASH">Cash</option><option value="CARD">Card</option><option value="MOBILE">Mobile pay</option></select></label><button type="submit" className="flex h-10 items-center justify-center gap-2 rounded-lg bg-chart-1 px-4 text-xs font-semibold text-white"><CreditCard className="size-3.5" aria-hidden="true" />Bill paid</button></form> : null}
               </article>
             ))}</div> : <div className="flex min-h-44 items-center justify-center px-5 text-center text-xs text-muted-foreground">No outstanding credit bills.</div>}
           </Surface>

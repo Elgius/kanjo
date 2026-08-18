@@ -1,11 +1,11 @@
 import Link from "next/link";
 
-import { canAccess, requireAuthorization } from "@/lib/authorization";
+import { can, requireAuthorization } from "@/lib/authorization";
 
 export default async function SettingsLayout({ children }: { children: React.ReactNode }) {
   const authorization = await requireAuthorization();
-  const canViewSettings = canAccess(authorization, "SETTINGS");
-  const canViewAudit = canAccess(authorization, "AUDIT_LOG");
+  const canViewSettings = can(authorization, "SETTINGS_VIEW");
+  const canViewAudit = can(authorization, "AUDIT_LOG_VIEW_ALL");
 
   return (
     <div>
@@ -16,7 +16,7 @@ export default async function SettingsLayout({ children }: { children: React.Rea
         {canViewSettings ? (
           <>
             <Link prefetch={false} href="/settings" className="rounded-lg border border-border bg-card px-3 py-2 text-xs font-semibold hover:bg-accent">Accounts</Link>
-            <Link prefetch={false} href="/settings/roles" className="rounded-lg border border-border bg-card px-3 py-2 text-xs font-semibold hover:bg-accent">Roles</Link>
+            {authorization.user.isSiteAdmin ? <Link prefetch={false} href="/settings/roles" className="rounded-lg border border-border bg-card px-3 py-2 text-xs font-semibold hover:bg-accent">Roles</Link> : null}
           </>
         ) : null}
         {canViewAudit ? (

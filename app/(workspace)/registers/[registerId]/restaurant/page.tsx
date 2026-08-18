@@ -4,7 +4,7 @@ import { notFound } from "next/navigation";
 import { Armchair, ArrowLeft, ArrowRight, Clock3, ReceiptText, Users } from "lucide-react";
 
 import { MetricCard, PageContainer, PageHeader, Surface } from "@/components/pos/primitives";
-import { canAccess, requirePageAccess } from "@/lib/authorization";
+import { can, canAccessRegister, requireCapability } from "@/lib/authorization";
 import { prisma } from "@/lib/db";
 import { formatMvr } from "@/lib/pos/money";
 import { cn } from "@/lib/utils";
@@ -33,9 +33,9 @@ export default async function RestaurantFloorPage({
   params: Promise<{ registerId: string }>;
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const authorization = await requirePageAccess("REGISTERS");
-  const canEdit = canAccess(authorization, "REGISTERS", "EDIT");
+  const authorization = await requireCapability("RESTAURANT_FLOOR_VIEW", "RESTAURANT_FLOOR_PAGE");
   const { registerId } = await params;
+  if (!canAccessRegister(authorization, registerId)) notFound();
   const query = await searchParams;
   const register = await prisma.cashRegister.findFirst({
     where: { id: registerId, active: true, purpose: "RESTAURANT" },
@@ -81,20 +81,20 @@ export default async function RestaurantFloorPage({
 
   return (
     <PageContainer>
-      <Link href={`/registers/${register.id}`} prefetch={false} className="flex w-fit items-center gap-2 text-[11px] font-semibold text-muted-foreground hover:text-foreground">
+      {can(authorization, "REGISTERS_VIEW") ? <Link href={`/registers/${register.id}`} prefetch={false} className="flex w-fit items-center gap-2 text-[11px] font-semibold text-muted-foreground hover:text-foreground">
         <ArrowLeft className="size-3.5" aria-hidden="true" />
         Back to register
-      </Link>
+      </Link> : null}
 
       <PageHeader
         eyebrow={`Restaurant / ${register.code}`}
         title={`${register.name} floor`}
         description="Set up tables, track occupancy, and open the bill assigned to each table."
-        actions={
+        actions={can(authorization, "RESTAURANT_MENU_VIEW") ?
           <Link prefetch={false} href={`/registers/${register.id}/menu`} className="flex h-10 items-center rounded-lg border border-border bg-card px-4 text-xs font-semibold">
             Manage menu
           </Link>
-        }
+        : null}
       />
 
       {success || error ? (
@@ -110,7 +110,7 @@ export default async function RestaurantFloorPage({
         <MetricCard label="SEATS IN USE" value={`${occupiedSeats} of ${totalSeats}`} note="By table capacity" dark />
       </section>
 
-      {canEdit ? (
+      {can(authorization, "RESTAURANT_TABLE_CREATE") ? (
         <Surface className="p-4 sm:p-5">
           <form action={createRestaurantTableAction.bind(null, register.id)} className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_140px_auto] sm:items-end">
             <label className="grid gap-1.5 text-[10px] tracking-[0.08em] text-muted-foreground">TABLE NAME<input name="name" required maxLength={60} placeholder="Table 1" className={fieldClass} /></label>
@@ -140,7 +140,7 @@ export default async function RestaurantFloorPage({
                   <div><h2 className="text-base font-semibold">{table.name}</h2><p className="mt-1 flex items-center gap-1.5 text-[11px] text-muted-foreground"><Users className="size-3" aria-hidden="true" />{table.seats} {table.seats === 1 ? "seat" : "seats"}</p></div>
                   {order ? <p className="font-mono text-lg font-semibold">{formatMvr(order.totalLaari)}</p> : null}
                 </div>
-                {order ? (
+                {order && can(authorization, "REGISTERS_VIEW") ? (
                   <div className="mt-4 grid gap-2 border-t border-border pt-3 text-[11px] text-muted-foreground">
                     <p className="flex items-center justify-between gap-3"><span className="flex items-center gap-1.5"><ReceiptText className="size-3" aria-hidden="true" />Current bill</span><span>{order._count.items} {order._count.items === 1 ? "line" : "lines"}</span></p>
                     <p className="flex items-center justify-between gap-3"><span className="flex items-center gap-1.5"><Clock3 className="size-3" aria-hidden="true" />Held for</span><span>{heldFor(order.heldAt)}</span></p>
@@ -150,7 +150,7 @@ export default async function RestaurantFloorPage({
               </div>
 
               <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-4">
-                {canEdit ? (
+                {can(authorization, "RESTAURANT_TABLE_UPDATE") ? (
                   <details className="relative">
                     <summary className="cursor-pointer list-none text-[11px] font-semibold text-muted-foreground">Edit table</summary>
                     <form action={updateRestaurantTableAction.bind(null, table.id, register.id)} className="absolute bottom-7 left-0 z-10 grid w-64 gap-2 rounded-xl border border-border bg-card p-3 shadow-xl">
@@ -164,9 +164,9 @@ export default async function RestaurantFloorPage({
                   <Link href={`/registers/${register.id}?order=${order.id}`} prefetch={false} className="flex h-9 items-center gap-2 rounded-lg bg-primary px-3 text-[11px] font-semibold text-primary-foreground">
                     Open bill <ArrowRight className="size-3.5" aria-hidden="true" />
                   </Link>
-                ) : (
+                ) : !order ? (
                   <span className="text-[10px] text-muted-foreground">{register.shifts.length ? "Assign from the register" : "Open a shift to assign"}</span>
-                )}
+                ) : null}
               </div>
             </Surface>
           );

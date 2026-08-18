@@ -4,10 +4,15 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 import { getAuditRequestContext, safeWriteAudit, writeAudit } from "@/lib/audit";
-import { requireActionAccess } from "@/lib/authorization";
+import {
+  requireCreditSettlementOperation,
+  requireGlobalOperation,
+  type AuthorizationContext,
+} from "@/lib/authorization";
 import { prisma } from "@/lib/db";
 import { settleCustomerCredit } from "@/lib/pos/customers";
 import { PosError } from "@/lib/pos/sales";
+import { parseMvr } from "@/lib/pos/money";
 import { parseCreditSettlementForm, parseCustomerForm } from "@/lib/pos/validation";
 
 function customerRedirect(
@@ -18,12 +23,12 @@ function customerRedirect(
   redirect(`${path}?${kind}=${encodeURIComponent(message)}`);
 }
 
-function actorLabel(authorization: Awaited<ReturnType<typeof requireActionAccess>>) {
+function actorLabel(authorization: AuthorizationContext) {
   return authorization.user.username ?? authorization.user.email;
 }
 
 export async function createCustomerAction(formData: FormData) {
-  const authorization = await requireActionAccess("CUSTOMERS", "CUSTOMER_CREATE");
+  const authorization = await requireGlobalOperation("CUSTOMER_CREATE");
   const parsed = parseCustomerForm(formData);
   if (!parsed.ok) customerRedirect("/customers", "error", parsed.error);
   const request = await getAuditRequestContext();
@@ -63,7 +68,7 @@ export async function createCustomerAction(formData: FormData) {
 }
 
 export async function updateCustomerAction(customerId: string, formData: FormData) {
-  const authorization = await requireActionAccess("CUSTOMERS", "CUSTOMER_UPDATE");
+  const authorization = await requireGlobalOperation("CUSTOMER_UPDATE");
   const parsed = parseCustomerForm(formData);
   if (!parsed.ok) customerRedirect(`/customers/${customerId}`, "error", parsed.error);
 
@@ -75,7 +80,16 @@ export async function updateCustomerAction(customerId: string, formData: FormDat
         select: { name: true, creditLimitLaari: true },
       });
       if (!before) throw new PosError("Customer not found.");
-      const customer = await tx.customer.update({ where: { id: customerId }, data: parsed.data });
+      const customer = await tx.customer.update({
+        where: { id: customerId },
+        data: {
+          name: parsed.data.name,
+          email: parsed.data.email,
+          address: parsed.data.address,
+          phoneNumber: parsed.data.phoneNumber,
+          nationality: parsed.data.nationality,
+        },
+      });
       await writeAudit(tx, {
         outcome: "SUCCESS",
         event: "CUSTOMER_UPDATE",
@@ -100,12 +114,34 @@ export async function updateCustomerAction(customerId: string, formData: FormDat
   customerRedirect(`/customers/${customerId}`, "success", "Customer updated.");
 }
 
+export async function updateCustomerCreditLimitAction(customerId: string, formData: FormData) {
+  const authorization = await requireGlobalOperation("CUSTOMER_CREDIT_LIMIT_UPDATE");
+  const creditLimitLaari = parseMvr(formData.get("creditLimit"));
+  if (creditLimitLaari === null) customerRedirect(`/customers/${customerId}`, "error", "Enter a valid credit limit.");
+  try {
+    const request = await getAuditRequestContext();
+    await prisma.$transaction(async (tx) => {
+      const before = await tx.customer.findFirst({ where: { id: customerId, active: true }, select: { name: true, creditLimitLaari: true } });
+      if (!before) throw new PosError("Customer not found.");
+      await tx.customer.update({ where: { id: customerId }, data: { creditLimitLaari } });
+      await writeAudit(tx, { outcome: "SUCCESS", event: "CUSTOMER_CREDIT_LIMIT_UPDATE", page: "CUSTOMERS",
+        actorId: authorization.user.id, actorLabel: actorLabel(authorization), targetType: "customer",
+        targetId: customerId, summary: `Credit limit updated for ${before.name}.`,
+        metadata: { before: before.creditLimitLaari, after: creditLimitLaari }, request });
+    });
+  } catch (error) {
+    customerRedirect(`/customers/${customerId}`, "error", error instanceof PosError ? error.message : "The credit limit could not be updated.");
+  }
+  revalidatePath("/customers"); revalidatePath(`/customers/${customerId}`); revalidatePath("/registers", "layout");
+  customerRedirect(`/customers/${customerId}`, "success", "Credit limit updated.");
+}
+
 export async function settleCustomerCreditAction(
   customerId: string,
   creditBillId: string,
   formData: FormData,
 ) {
-  const authorization = await requireActionAccess("CUSTOMERS", "CUSTOMER_CREDIT_SETTLE");
+  const { authorization } = await requireCreditSettlementOperation(creditBillId, "CUSTOMER_CREDIT_SETTLE");
   const parsed = parseCreditSettlementForm(formData);
   if (!parsed.ok) customerRedirect(`/customers/${customerId}`, "error", parsed.error);
 

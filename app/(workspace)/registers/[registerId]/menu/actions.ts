@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 import { getAuditRequestContext, safeWriteAudit, writeAudit } from "@/lib/audit";
-import { requireActionAccess } from "@/lib/authorization";
+import { requireEntityOperation, requireRegisterOperation } from "@/lib/authorization";
 import { prisma } from "@/lib/db";
 import { parseMenuItemForm } from "@/lib/pos/validation";
 
@@ -36,7 +36,7 @@ async function validateRecipe(registerId: string, formData: FormData) {
 }
 
 export async function createMenuItemAction(registerId: string, formData: FormData) {
-  const authorization = await requireActionAccess("REGISTERS", "MENU_ITEM_CREATE");
+  const authorization = await requireRegisterOperation("MENU_ITEM_CREATE", registerId);
   const parsed = await validateRecipe(registerId, formData);
   if (!parsed.ok) menuRedirect(registerId, "error", parsed.error);
   try {
@@ -62,7 +62,8 @@ export async function createMenuItemAction(registerId: string, formData: FormDat
 }
 
 export async function updateMenuItemAction(menuItemId: string, registerId: string, formData: FormData) {
-  const authorization = await requireActionAccess("REGISTERS", "MENU_ITEM_UPDATE");
+  const { authorization, registerId: trustedRegisterId } = await requireEntityOperation("MENU_ITEM_UPDATE", "menuItem", menuItemId);
+  if (trustedRegisterId !== registerId) menuRedirect(trustedRegisterId, "error", "That menu item does not belong to this register.");
   const parsed = await validateRecipe(registerId, formData);
   if (!parsed.ok) menuRedirect(registerId, "error", parsed.error);
   try {
@@ -88,12 +89,13 @@ export async function updateMenuItemAction(menuItemId: string, registerId: strin
 }
 
 export async function toggleMenuItemAction(menuItemId: string, registerId: string, active: boolean) {
-  const authorization = await requireActionAccess("REGISTERS", "MENU_ITEM_UPDATE");
+  const { authorization, registerId: trustedRegisterId } = await requireEntityOperation("MENU_ITEM_UPDATE", "menuItem", menuItemId);
+  if (trustedRegisterId !== registerId) menuRedirect(trustedRegisterId, "error", "That menu item does not belong to this register.");
   const updated = await prisma.menuItem.updateMany({ where: { id: menuItemId, registerId }, data: { active } });
   if (updated.count !== 1) menuRedirect(registerId, "error", "Menu item not found.");
-  await safeWriteAudit({ outcome: "SUCCESS", event: active ? "MENU_ITEM_ACTIVATE" : "MENU_ITEM_ARCHIVE", page: "REGISTERS",
+  await safeWriteAudit({ outcome: "SUCCESS", event: "MENU_ITEM_UPDATE", page: "REGISTERS",
     actorId: authorization.user.id, actorLabel: authorization.user.username ?? authorization.user.email,
-    targetType: "menu_item", targetId: menuItemId, summary: active ? "Menu item activated." : "Menu item archived.", metadata: { registerId } });
+    targetType: "menu_item", targetId: menuItemId, summary: active ? "Menu item activated." : "Menu item archived.", metadata: { registerId, operation: active ? "ACTIVATE" : "ARCHIVE" } });
   revalidatePath(`/registers/${registerId}/menu`); revalidatePath("/registers");
   menuRedirect(registerId, "success", active ? "Menu item activated." : "Menu item archived.");
 }

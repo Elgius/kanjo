@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 import { getAuditRequestContext, safeWriteAudit, writeAudit } from "@/lib/audit";
-import { requireActionAccess } from "@/lib/authorization";
+import { requireEntityOperation, requireRegisterOperation } from "@/lib/authorization";
 import { prisma } from "@/lib/db";
 import { parseRestaurantTableForm } from "@/lib/pos/validation";
 
@@ -19,7 +19,7 @@ function refreshRestaurant(registerId: string) {
 }
 
 export async function createRestaurantTableAction(registerId: string, formData: FormData) {
-  const authorization = await requireActionAccess("REGISTERS", "RESTAURANT_TABLE_CREATE");
+  const authorization = await requireRegisterOperation("RESTAURANT_TABLE_CREATE", registerId);
   const parsed = parseRestaurantTableForm(formData);
   if (!parsed.ok) restaurantRedirect(registerId, "error", parsed.error);
 
@@ -71,7 +71,8 @@ export async function createRestaurantTableAction(registerId: string, formData: 
 }
 
 export async function updateRestaurantTableAction(tableId: string, registerId: string, formData: FormData) {
-  const authorization = await requireActionAccess("REGISTERS", "RESTAURANT_TABLE_UPDATE");
+  const { authorization, registerId: trustedRegisterId } = await requireEntityOperation("RESTAURANT_TABLE_UPDATE", "restaurantTable", tableId);
+  if (trustedRegisterId !== registerId) restaurantRedirect(trustedRegisterId, "error", "That table does not belong to this register.");
   const parsed = parseRestaurantTableForm(formData);
   if (!parsed.ok) restaurantRedirect(registerId, "error", parsed.error);
 
