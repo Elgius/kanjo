@@ -180,6 +180,28 @@ databaseDescribe("Neon sale transaction", () => {
       audit: { actorLabel: marker },
     });
     expect(creditBill.totalLaari).toBe(2_500);
+    const storedCreditBill = await db.customerCreditBill.findUniqueOrThrow({
+      where: { id: creditBill.id },
+      select: {
+        status: true,
+        saleId: true,
+        stockMovements: {
+          select: {
+            type: true,
+            saleId: true,
+            customerCreditBillId: true,
+            quantityDelta: true,
+          },
+        },
+      },
+    });
+    expect(storedCreditBill.status).toBe("OUTSTANDING");
+    expect(storedCreditBill.saleId).toBeNull();
+    expect(storedCreditBill.stockMovements).toHaveLength(1);
+    expect(storedCreditBill.stockMovements[0].type).toBe("SALE");
+    expect(storedCreditBill.stockMovements[0].saleId).toBeNull();
+    expect(storedCreditBill.stockMovements[0].customerCreditBillId).toBe(creditBill.id);
+    expect(Number(storedCreditBill.stockMovements[0].quantityDelta)).toBe(-1);
     expect(await db.sale.count({ where: { createdById: userId } })).toBe(salesBefore);
     expect(Number((await db.inventoryBatch.aggregate({ where: { productId }, _sum: { remainingQuantity: true } }))._sum.remainingQuantity)).toBe(beforeStock - 1);
 
