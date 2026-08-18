@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
-import { Minus, Plus, Search } from "lucide-react";
+import { Minus, Plus, Printer, Search } from "lucide-react";
 import Link from "next/link";
 import { useFormStatus } from "react-dom";
 
@@ -114,6 +114,9 @@ function SubmitButtons({
 
 export function RegisterSaleWorkspace({
   registerId,
+  registerName,
+  registerCode,
+  cashierName,
   shiftId,
   items,
   isRestaurant,
@@ -124,6 +127,9 @@ export function RegisterSaleWorkspace({
   initialHeldOrderId,
 }: {
   registerId: string;
+  registerName: string;
+  registerCode: string;
+  cashierName: string;
   shiftId: string;
   items: SellableItem[];
   isRestaurant: boolean;
@@ -149,6 +155,9 @@ export function RegisterSaleWorkspace({
     Object.fromEntries(initialOrder?.items.map((item) => [item.itemId, item.quantity]) ?? []),
   );
   const activeHeldOrder = heldOrders.find((order) => order.id === heldOrderId);
+  const selectedRestaurantTable = restaurantTables.find(
+    (table) => table.id === restaurantTableId,
+  );
 
   const categories = useMemo(() => {
     const counts = new Map<string, number>();
@@ -356,6 +365,16 @@ export function RegisterSaleWorkspace({
             >
               Clear
             </button>
+            <button
+              type="button"
+              onClick={() => window.print()}
+              disabled={!cartLines.length}
+              aria-label="Print unpaid bill"
+              title={cartLines.length ? "Print unpaid bill" : "Add an item before printing"}
+              className="flex size-[30px] items-center justify-center rounded-[7px] border border-border text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <Printer className="size-3.5" aria-hidden="true" />
+            </button>
           </div>
         </div>
 
@@ -495,6 +514,78 @@ export function RegisterSaleWorkspace({
           ) : null}
         </div>
       </form>
+
+      <article className="current-order-print-root pointer-events-none fixed -left-[10000px] top-0 w-[48mm] bg-white font-mono text-[10px] leading-[1.35] text-black">
+        <header className="border-b border-dashed border-black pb-2 text-center">
+          <h1 className="text-sm font-bold">KANJO</h1>
+          <p className="mt-1">{registerName}</p>
+          <p>{registerCode}</p>
+        </header>
+        <div className="border-b border-dashed border-black py-2">
+          <div className="flex justify-between gap-2">
+            <span>Bill</span>
+            <strong>
+              {activeHeldOrder
+                ? `HELD ${activeHeldOrder.id.slice(0, 6).toUpperCase()}`
+                : "NEW ORDER"}
+            </strong>
+          </div>
+          <div className="flex justify-between gap-2">
+            <span>Cashier</span>
+            <span className="truncate text-right">{cashierName}</span>
+          </div>
+          {selectedRestaurantTable ? (
+            <div className="flex justify-between gap-2">
+              <span>Table</span>
+              <span className="text-right">{selectedRestaurantTable.name}</span>
+            </div>
+          ) : null}
+          {customerNote.trim() ? (
+            <div className="mt-1">
+              <span>Note</span>
+              <p className="break-words">{customerNote.trim()}</p>
+            </div>
+          ) : null}
+        </div>
+        <div className="grid gap-2 border-b border-dashed border-black py-2">
+          {cartLines.map((item) => (
+            <div key={item.id}>
+              <div className="flex justify-between gap-2 font-bold">
+                <span className="min-w-0 break-words">{item.name}</span>
+                <span className="shrink-0">
+                  {formatMvr(item.retailPriceLaari * item.quantity)}
+                </span>
+              </div>
+              <div className="flex justify-between gap-2">
+                <span>{item.quantity} × {formatMvr(item.retailPriceLaari)}</span>
+                {item.sku ? <span>{item.sku}</span> : null}
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="grid gap-1 py-2">
+          <div className="flex justify-between">
+            <span>Subtotal · {itemCount} items</span>
+            <span>{formatMvr(totalLaari)}</span>
+          </div>
+          <div className="flex justify-between">
+            <span>Tax</span>
+            <span>Included</span>
+          </div>
+          <div className="flex justify-between text-xs font-bold">
+            <span>TOTAL</span>
+            <span>{formatMvr(totalLaari)}</span>
+          </div>
+          <div className="flex justify-between">
+            <span>Payment</span>
+            <span>Pending</span>
+          </div>
+        </div>
+        <footer className="border-t border-dashed border-black pt-2 text-center">
+          <p className="text-sm font-black tracking-[0.18em]">UNPAID</p>
+          <p className="mt-1">Powered by Kanjo</p>
+        </footer>
+      </article>
       </section>
     </div>
   );

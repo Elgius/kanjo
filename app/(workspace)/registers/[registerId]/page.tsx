@@ -153,6 +153,9 @@ export default async function RegisterManagementPage({
           <RegisterSaleWorkspace
             key={`${lastSale?.id ?? "empty"}:${creditedBillId ?? "no-credit"}:${data.heldOrders.map((order) => order.id).join(",")}`}
             registerId={register.id}
+            registerName={register.name}
+            registerCode={register.code}
+            cashierName={authorization.user.name}
             shiftId={shift.id}
             items={data.items}
             isRestaurant={register.purpose === "RESTAURANT"}
