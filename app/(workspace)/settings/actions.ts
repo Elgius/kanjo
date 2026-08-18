@@ -5,7 +5,6 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 import { Prisma } from "@/generated/prisma/client";
-import type { PageKey, PermissionLevel } from "@/generated/prisma/enums";
 import { getAuditRequestContext, safeWriteAudit, writeAudit } from "@/lib/audit";
 import {
   requireSiteAdminAction,
@@ -15,7 +14,10 @@ import { prisma } from "@/lib/db";
 import {
   normalizeRoleName,
   PAGE_DEFINITIONS,
-  parsePermissionValue,
+  legacyPermissionProjection,
+  parseCapabilityValues,
+  parseRegisterScopeMode,
+  validateCapabilitySelection,
   validateRoleName,
   validateUsername,
 } from "@/lib/permissions";
@@ -50,14 +52,27 @@ async function auditFailure(
   });
 }
 
-function permissionsFromForm(formData: FormData) {
-  return PAGE_DEFINITIONS.map((page) => ({
-    page: page.key as PageKey,
-    level: parsePermissionValue(
-      formData.get(`permission_${page.key}`),
-      page.editable,
-    ) as PermissionLevel,
-  }));
+async function grantsFromForm(formData: FormData) {
+  const scopeMode = parseRegisterScopeMode(formData.get("registerScopeMode"));
+  const registerIds = formData.getAll("registerIds").filter(
+    (value): value is string => typeof value === "string" && Boolean(value),
+  );
+  const validated = validateCapabilitySelection(parseCapabilityValues(formData), scopeMode, registerIds);
+  if (!validated.ok) return validated;
+  if (scopeMode === "SELECTED" && registerIds.length) {
+    const existing = await prisma.cashRegister.count({ where: { id: { in: registerIds } } });
+    if (existing !== new Set(registerIds).size) {
+      return { ok: false as const, error: "One or more selected registers no longer exist." };
+    }
+  }
+  const projection = legacyPermissionProjection(validated.capabilities);
+  return {
+    ok: true as const,
+    scopeMode,
+    registerIds: scopeMode === "SELECTED" ? Array.from(new Set(registerIds)) : [],
+    capabilities: validated.capabilities,
+    permissions: PAGE_DEFINITIONS.map(({ key: page }) => ({ page, level: projection[page] })),
+  };
 }
 
 export async function createRoleAction(formData: FormData) {
@@ -68,7 +83,8 @@ export async function createRoleAction(formData: FormData) {
     settingsRedirect("/settings/roles", "error", parsedName.error);
   }
   const description = String(formData.get("description") ?? "").trim().slice(0, 500) || null;
-  const permissions = permissionsFromForm(formData);
+  const grants = await grantsFromForm(formData);
+  if (!grants.ok) settingsRedirect("/settings/roles", "error", grants.error);
   const request = await getAuditRequestContext();
 
   try {
@@ -78,7 +94,10 @@ export async function createRoleAction(formData: FormData) {
           name: parsedName.value,
           normalizedName: normalizeRoleName(parsedName.value),
           description,
-          permissions: { create: permissions },
+          registerScopeMode: grants.scopeMode,
+          permissions: { create: grants.permissions },
+          capabilities: { create: grants.capabilities.map((capability) => ({ capability })) },
+          registerAccess: { create: grants.registerIds.map((registerId) => ({ registerId })) },
         },
         select: { id: true, name: true },
       });
@@ -91,7 +110,7 @@ export async function createRoleAction(formData: FormData) {
         targetType: "role",
         targetId: role.id,
         summary: `Role ${role.name} created.`,
-        metadata: { permissions },
+        metadata: { capabilities: grants.capabilities, registerScopeMode: grants.scopeMode, registerIds: grants.registerIds },
         request,
       });
     });
@@ -116,14 +135,20 @@ export async function updateRoleAction(roleId: string, formData: FormData) {
     settingsRedirect("/settings/roles", "error", parsedName.error);
   }
   const description = String(formData.get("description") ?? "").trim().slice(0, 500) || null;
-  const permissions = permissionsFromForm(formData);
+  const grants = await grantsFromForm(formData);
+  if (!grants.ok) settingsRedirect("/settings/roles", "error", grants.error);
   const request = await getAuditRequestContext();
 
   try {
     await prisma.$transaction(async (tx) => {
       const before = await tx.role.findUniqueOrThrow({
         where: { id: roleId },
-        select: { name: true, permissions: { select: { page: true, level: true } } },
+        select: {
+          name: true,
+          registerScopeMode: true,
+          capabilities: { select: { capability: true } },
+          registerAccess: { select: { registerId: true } },
+        },
       });
       const role = await tx.role.update({
         where: { id: roleId },
@@ -131,13 +156,24 @@ export async function updateRoleAction(roleId: string, formData: FormData) {
           name: parsedName.value,
           normalizedName: normalizeRoleName(parsedName.value),
           description,
+          registerScopeMode: grants.scopeMode,
         },
         select: { id: true, name: true },
       });
       await tx.rolePermission.deleteMany({ where: { roleId } });
       await tx.rolePermission.createMany({
-        data: permissions.map((permission) => ({ roleId, ...permission })),
+        data: grants.permissions.map((permission) => ({ roleId, ...permission })),
       });
+      await tx.roleCapability.deleteMany({ where: { roleId } });
+      await tx.roleCapability.createMany({
+        data: grants.capabilities.map((capability) => ({ roleId, capability })),
+      });
+      await tx.roleRegisterAccess.deleteMany({ where: { roleId } });
+      if (grants.registerIds.length) {
+        await tx.roleRegisterAccess.createMany({
+          data: grants.registerIds.map((registerId) => ({ roleId, registerId })),
+        });
+      }
       await writeAudit(tx, {
         outcome: "SUCCESS",
         event: "ROLE_UPDATE",
@@ -147,7 +183,7 @@ export async function updateRoleAction(roleId: string, formData: FormData) {
         targetType: "role",
         targetId: role.id,
         summary: `Role ${role.name} updated.`,
-        metadata: { before, after: { name: role.name, permissions } },
+        metadata: { before, after: { name: role.name, capabilities: grants.capabilities, registerScopeMode: grants.scopeMode, registerIds: grants.registerIds } },
         request,
       });
     });

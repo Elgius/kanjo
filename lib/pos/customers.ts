@@ -348,8 +348,12 @@ export async function getCustomersOverview() {
   };
 }
 
-export async function getCustomerDetail(customerId: string) {
-  const customer = await prisma.customer.findFirst({
+export async function getCustomerDetail(
+  customerId: string,
+  authorizedRegisterIds: readonly string[] | null = null,
+  includeCreditDetails = true,
+) {
+  const [customer, outstanding] = await Promise.all([prisma.customer.findFirst({
     where: { id: customerId, active: true },
     select: {
       id: true,
@@ -360,6 +364,11 @@ export async function getCustomerDetail(customerId: string) {
       nationality: true,
       creditLimitLaari: true,
       creditBills: {
+        where: includeCreditDetails
+          ? authorizedRegisterIds
+            ? { registerId: { in: Array.from(authorizedRegisterIds) } }
+            : undefined
+          : { registerId: { in: [] } },
         orderBy: { issuedAt: "desc" },
         select: {
           id: true,
@@ -370,23 +379,35 @@ export async function getCustomerDetail(customerId: string) {
           note: true,
           issuedAt: true,
           paidAt: true,
-          register: { select: { id: true, name: true, code: true } },
+          register: {
+            select: {
+              id: true,
+              name: true,
+              code: true,
+              shifts: {
+                where: { status: "OPEN" },
+                orderBy: { openedAt: "desc" },
+                take: 1,
+                select: { openedById: true },
+              },
+            },
+          },
           createdBy: { select: { name: true } },
           sale: { select: { receiptNumber: true, paymentMethod: true } },
         },
       },
     },
-  });
+  }), prisma.customerCreditBill.aggregate({
+    where: { customerId, status: "OUTSTANDING" },
+    _sum: { totalLaari: true },
+  })]);
   if (!customer) return null;
   const bills = customer.creditBills.map((bill) => ({
     ...bill,
     items: parseCreditBillItems(bill.items),
     receiptNumber: bill.sale?.receiptNumber.toString() ?? null,
   }));
-  const outstandingLaari = bills.reduce(
-    (total, bill) => total + (bill.status === "OUTSTANDING" ? bill.totalLaari : 0),
-    0,
-  );
+  const outstandingLaari = outstanding._sum.totalLaari ?? 0;
   return {
     ...customer,
     creditBills: bills,

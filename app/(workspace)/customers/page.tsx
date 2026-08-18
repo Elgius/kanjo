@@ -3,7 +3,7 @@ import Link from "next/link";
 import { ArrowRight, Pencil, Search, UserRound } from "lucide-react";
 
 import { MetricCard, PageContainer, PageHeader, Surface } from "@/components/pos/primitives";
-import { canAccess, requirePageAccess } from "@/lib/authorization";
+import { can, requireCapability } from "@/lib/authorization";
 import { getCustomersOverview } from "@/lib/pos/customers";
 import { formatMvr } from "@/lib/pos/money";
 import { cn } from "@/lib/utils";
@@ -22,8 +22,9 @@ export default async function CustomersPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const authorization = await requirePageAccess("CUSTOMERS");
-  const canEdit = canAccess(authorization, "CUSTOMERS", "EDIT");
+  const authorization = await requireCapability("CUSTOMERS_VIEW", "CUSTOMERS_PAGE");
+  const canCreate = can(authorization, "CUSTOMER_CREATE");
+  const canEdit = can(authorization, "CUSTOMER_UPDATE") || can(authorization, "CUSTOMER_CREDIT_LIMIT_UPDATE");
   const queryParams = await searchParams;
   const query = single(queryParams.query)?.trim().toLocaleLowerCase() ?? "";
   const success = single(queryParams.success);
@@ -49,7 +50,7 @@ export default async function CustomersPage({
         <MetricCard label="AT LIMIT" value={String(data.metrics.atLimit)} note="Cannot hold more" accent={data.metrics.atLimit > 0} />
       </section>
 
-      {canEdit ? (
+      {canCreate ? (
         <details className="rounded-xl border border-border bg-card p-4 sm:p-5">
           <summary className="cursor-pointer text-sm font-semibold">Add customer</summary>
           <form action={createCustomerAction} className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">

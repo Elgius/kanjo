@@ -1,5 +1,5 @@
 import { PageContainer, PageHeader, Surface } from "@/components/pos/primitives";
-import { canAccess, requirePageAccess } from "@/lib/authorization";
+import { requireCapability } from "@/lib/authorization";
 import { prisma } from "@/lib/db";
 import { cn } from "@/lib/utils";
 import {
@@ -20,7 +20,7 @@ const fieldClass =
   "h-10 rounded-lg border border-border bg-card px-3 text-xs outline-none focus:border-ring focus:ring-2 focus:ring-ring/15";
 
 export default async function SettingsPage({ searchParams }: PageProps<"/settings">) {
-  const authorization = await requirePageAccess("SETTINGS");
+  const authorization = await requireCapability("SETTINGS_VIEW", "SETTINGS_PAGE");
   const params = await searchParams;
   const [accounts, roles] = await Promise.all([
     prisma.user.findMany({
@@ -106,7 +106,7 @@ export default async function SettingsPage({ searchParams }: PageProps<"/setting
         </Surface>
       </section>
 
-      {!isSiteAdmin && canAccess(authorization, "SETTINGS") ? (
+      {!isSiteAdmin ? (
         <p className="text-xs text-muted-foreground">Account and role changes are reserved for site administrators.</p>
       ) : null}
     </PageContainer>

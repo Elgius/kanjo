@@ -85,7 +85,7 @@ function Brand({ compact = false, homeHref = "/" }: { compact?: boolean; homeHre
   );
 }
 
-function Navigation({ allowedPages }: { allowedPages: PageKey[] }) {
+function Navigation({ allowedPages, registerTree }: { allowedPages: PageKey[]; registerTree: { selection: boolean; sessions: boolean; edit: boolean } }) {
   const pathname = usePathname();
   const [registersOpen, setRegistersOpen] = useState(true);
   const visibleNavigation = navigation
@@ -128,7 +128,7 @@ function Navigation({ allowedPages }: { allowedPages: PageKey[] }) {
                 </SidebarMenuButton>
                 {registersOpen ? (
                   <SidebarMenuSub className="pb-1 pt-1">
-                    <SidebarMenuSubItem>
+                    {registerTree.selection ? <SidebarMenuSubItem>
                       <SidebarMenuSubButton
                         render={<Link href="/registers" prefetch={false} />}
                         isActive={selectionActive}
@@ -137,8 +137,8 @@ function Navigation({ allowedPages }: { allowedPages: PageKey[] }) {
                         <ListChecks aria-hidden="true" />
                         <span>Register selection</span>
                       </SidebarMenuSubButton>
-                    </SidebarMenuSubItem>
-                    <SidebarMenuSubItem>
+                    </SidebarMenuSubItem> : null}
+                    {registerTree.sessions ? <SidebarMenuSubItem>
                       <SidebarMenuSubButton
                         render={<Link href="/registers/sessions" prefetch={false} />}
                         isActive={sessionsActive}
@@ -147,8 +147,8 @@ function Navigation({ allowedPages }: { allowedPages: PageKey[] }) {
                         <Clock3 aria-hidden="true" />
                         <span>Sessions</span>
                       </SidebarMenuSubButton>
-                    </SidebarMenuSubItem>
-                    <SidebarMenuSubItem>
+                    </SidebarMenuSubItem> : null}
+                    {registerTree.edit ? <SidebarMenuSubItem>
                       <SidebarMenuSubButton
                         render={<Link href="/registers/edit" prefetch={false} />}
                         isActive={editActive}
@@ -157,7 +157,7 @@ function Navigation({ allowedPages }: { allowedPages: PageKey[] }) {
                         <PencilLine aria-hidden="true" />
                         <span>Edit</span>
                       </SidebarMenuSubButton>
-                    </SidebarMenuSubItem>
+                    </SidebarMenuSubItem> : null}
                   </SidebarMenuSub>
                 ) : null}
               </SidebarMenuItem>
@@ -285,10 +285,11 @@ type SidebarProps = {
   };
   registers: SidebarRegister[];
   allowedPages: PageKey[];
+  registerTree: { selection: boolean; sessions: boolean; edit: boolean };
   homeHref: string;
 };
 
-export function Sidebar({ user, registers, allowedPages, homeHref }: SidebarProps) {
+export function Sidebar({ user, registers, allowedPages, registerTree, homeHref }: SidebarProps) {
   const router = useRouter();
   const initials = user.name
     .split(/\s+/)
@@ -309,7 +310,7 @@ export function Sidebar({ user, registers, allowedPages, homeHref }: SidebarProp
         <Brand homeHref={homeHref} />
       </SidebarHeader>
       <SidebarContent className="gap-7">
-        <Navigation allowedPages={allowedPages} />
+        <Navigation allowedPages={allowedPages} registerTree={registerTree} />
         <RegistryPicker registers={registers} />
       </SidebarContent>
       <SidebarFooter className="px-5 pb-7 group-data-[collapsible=icon]:px-2">

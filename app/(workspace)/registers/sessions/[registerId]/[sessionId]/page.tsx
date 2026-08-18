@@ -4,7 +4,7 @@ import { notFound } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 
 import { MetricCard, PageContainer, PageHeader, Surface } from "@/components/pos/primitives";
-import { requirePageAccess } from "@/lib/authorization";
+import { authorizedRegisterIds, requireCapability } from "@/lib/authorization";
 import { formatMvr } from "@/lib/pos/money";
 import { getRegisterSession } from "@/lib/pos/register-sessions";
 import { cn } from "@/lib/utils";
@@ -36,9 +36,9 @@ export default async function RegisterSessionPage({
 }: {
   params: Promise<{ registerId: string; sessionId: string }>;
 }) {
-  await requirePageAccess("REGISTERS");
+  const authorization = await requireCapability("REGISTER_SESSIONS_VIEW", "REGISTER_SESSION_PAGE");
   const { registerId, sessionId } = await params;
-  const session = await getRegisterSession(registerId, sessionId);
+  const session = await getRegisterSession(registerId, sessionId, authorizedRegisterIds(authorization));
   if (!session) notFound();
 
   return (

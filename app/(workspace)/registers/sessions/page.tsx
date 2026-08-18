@@ -3,7 +3,7 @@ import Link from "next/link";
 import { ArrowRight, Clock3, Store } from "lucide-react";
 
 import { MetricCard, PageContainer, PageHeader, Surface } from "@/components/pos/primitives";
-import { requirePageAccess } from "@/lib/authorization";
+import { authorizedRegisterIds, requireCapability } from "@/lib/authorization";
 import { getSessionRegisters } from "@/lib/pos/register-sessions";
 
 export const metadata: Metadata = {
@@ -23,8 +23,8 @@ function formatDateTime(value: Date) {
 }
 
 export default async function RegisterSessionsPage() {
-  await requirePageAccess("REGISTERS");
-  const data = await getSessionRegisters();
+  const authorization = await requireCapability("REGISTER_SESSIONS_VIEW", "REGISTER_SESSIONS_PAGE");
+  const data = await getSessionRegisters(authorizedRegisterIds(authorization));
 
   return (
     <PageContainer>

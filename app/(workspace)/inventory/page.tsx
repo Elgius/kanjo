@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { notFound } from "next/navigation";
 import { ChevronLeft, ChevronRight, Search } from "lucide-react";
 
 import { MetricCard, PageContainer, PageHeader, Surface } from "@/components/pos/primitives";
@@ -14,7 +15,7 @@ import { formatMvr } from "@/lib/pos/money";
 import { dateOnly, formatQuantity, maldivesDate, quantityNumber } from "@/lib/pos/inventory";
 import { getInventoryData, type InventoryFilters } from "@/lib/pos/queries";
 import { cn } from "@/lib/utils";
-import { canAccess, requirePageAccess } from "@/lib/authorization";
+import { authorizedRegisterIds, can, canAccessRegister, requireCapability } from "@/lib/authorization";
 import { assignBatchExpiryAction, receiveStockAction, writeOffBatchAction } from "./actions";
 import { CategoryManager, InventoryItemActions, NewProductMenu } from "./product-form";
 
@@ -39,8 +40,18 @@ function inventoryHref(
 }
 
 export default async function InventoryPage({ searchParams }: PageProps<"/inventory">) {
-  const authorization = await requirePageAccess("INVENTORY");
-  const canEdit = canAccess(authorization, "INVENTORY", "EDIT");
+  const authorization = await requireCapability("INVENTORY_VIEW", "INVENTORY_PAGE");
+  const canCreateProduct = can(authorization, "PRODUCT_CREATE");
+  const canUpdateProduct = can(authorization, "PRODUCT_UPDATE");
+  const canDeleteProduct = can(authorization, "PRODUCT_DELETE");
+  const canReceiveStock = can(authorization, "STOCK_RECEIVE");
+  const canAssignExpiry = can(authorization, "BATCH_EXPIRY_UPDATE");
+  const canWriteOff = can(authorization, "STOCK_WRITE_OFF");
+  const categoryPermissions = {
+    create: can(authorization, "CATEGORY_CREATE_GLOBAL"),
+    update: can(authorization, "CATEGORY_UPDATE_GLOBAL"),
+    delete: can(authorization, "CATEGORY_DELETE_GLOBAL"),
+  };
   const params = await searchParams;
   const rawStatus = single(params.status);
   const rawSort = single(params.sort);
@@ -56,7 +67,8 @@ export default async function InventoryPage({ searchParams }: PageProps<"/invent
       : "recent",
     page: Number(single(params.page)) || 1,
   };
-  const data = await getInventoryData(filters);
+  if (filters.register && filters.register !== "all" && !canAccessRegister(authorization, filters.register)) notFound();
+  const data = await getInventoryData(filters, authorizedRegisterIds(authorization));
   const success = single(params.success);
   const error = single(params.error);
 
@@ -66,7 +78,7 @@ export default async function InventoryPage({ searchParams }: PageProps<"/invent
         eyebrow="Catalogue"
         title="Inventory"
         description="Manage products, pricing, and stock from one live catalogue."
-        actions={canEdit ? <div className="flex gap-2"><CategoryManager categories={data.categories} /><NewProductMenu registers={data.registers} categories={data.categories} /></div> : null}
+        actions={canCreateProduct || Object.values(categoryPermissions).some(Boolean) ? <div className="flex gap-2">{Object.values(categoryPermissions).some(Boolean) ? <CategoryManager categories={data.categories} permissions={categoryPermissions} /> : null}{canCreateProduct ? <NewProductMenu registers={data.registers} categories={data.categories} /> : null}</div> : null}
       />
 
       {success || error ? (
@@ -131,7 +143,7 @@ export default async function InventoryPage({ searchParams }: PageProps<"/invent
                     </TableCell>
                     <TableCell className="p-0 font-mono">{formatMvr(product.retailPriceLaari)}</TableCell>
                     <TableCell className="p-0 text-right">
-                      {canEdit ? <div className="flex justify-end gap-2"><InventoryItemActions product={{ id: product.id, sku: product.sku, barcode: product.barcode, name: product.name, categoryId: product.categoryId, description: product.description, retailPriceLaari: product.retailPriceLaari, costPriceLaari: product.costPriceLaari, lowStockThreshold: product.lowStockThreshold, kind: product.kind, registerName: product.register.name }} categories={data.categories} /><details className="relative inline-block text-left"><summary className="cursor-pointer list-none rounded-md border border-border px-3 py-2 text-[11px] hover:bg-accent">Receive stock</summary><form action={receiveStockAction.bind(null, product.id)} className="absolute right-0 z-20 mt-2 grid w-64 gap-2 rounded-xl border border-border bg-card p-4 text-left shadow-xl"><strong className="text-xs">Receive {product.name}</strong><label className="grid gap-1 text-[10px]">STOCK ITEMS<input name="stockUnits" type="number" min="1" step="1" required className={fieldClass} /></label><label className="grid gap-1 text-[10px]">EXPIRY {product.register.purpose === "RESTAURANT" ? "(REQUIRED)" : "(OPTIONAL)"}<input name="expiryDate" type="date" required={product.register.purpose === "RESTAURANT"} className={fieldClass} /></label><input type="hidden" name="reason" value="Stock received" /><button className="h-9 rounded-lg bg-primary text-xs font-semibold text-primary-foreground">Add batch</button></form></details></div> : <span className="text-[10px] text-muted-foreground">View only</span>}
+                      {canUpdateProduct || canReceiveStock ? <div className="flex justify-end gap-2">{canUpdateProduct ? <InventoryItemActions product={{ id: product.id, sku: product.sku, barcode: product.barcode, name: product.name, categoryId: product.categoryId, description: product.description, retailPriceLaari: product.retailPriceLaari, costPriceLaari: product.costPriceLaari, lowStockThreshold: product.lowStockThreshold, kind: product.kind, registerName: product.register.name }} categories={data.categories} canDelete={canDeleteProduct} /> : null}{canReceiveStock ? <details className="relative inline-block text-left"><summary className="cursor-pointer list-none rounded-md border border-border px-3 py-2 text-[11px] hover:bg-accent">Receive stock</summary><form action={receiveStockAction.bind(null, product.id)} className="absolute right-0 z-20 mt-2 grid w-64 gap-2 rounded-xl border border-border bg-card p-4 text-left shadow-xl"><strong className="text-xs">Receive {product.name}</strong><label className="grid gap-1 text-[10px]">STOCK ITEMS<input name="stockUnits" type="number" min="1" step="1" required className={fieldClass} /></label><label className="grid gap-1 text-[10px]">EXPIRY {product.register.purpose === "RESTAURANT" ? "(REQUIRED)" : "(OPTIONAL)"}<input name="expiryDate" type="date" required={product.register.purpose === "RESTAURANT"} className={fieldClass} /></label><input type="hidden" name="reason" value="Stock received" /><button className="h-9 rounded-lg bg-primary text-xs font-semibold text-primary-foreground">Add batch</button></form></details> : null}</div> : <span className="text-[10px] text-muted-foreground">View only</span>}
                     </TableCell>
                   </TableRow>
                 );
@@ -160,7 +172,7 @@ export default async function InventoryPage({ searchParams }: PageProps<"/invent
           const today = maldivesDate();
           const status = !batch.expiryDate ? "Expiry missing" : batch.expiryDate < today ? "Expired" : "Usable";
           const remaining = quantityNumber(batch.remainingQuantity);
-          return <div key={batch.id} className="grid gap-3 rounded-lg border border-border p-3 text-xs lg:grid-cols-[1fr_150px_160px_minmax(260px,auto)] lg:items-center"><div><strong>{product.name}</strong><p className="mt-1 font-mono text-[10px] text-muted-foreground">{batch.id}</p></div><span>{formatQuantity(product, remaining)}</span><span className={cn(status === "Expired" && "text-destructive", status === "Usable" && "text-emerald-700")}>{status}{batch.expiryDate ? ` · ${dateOnly(batch.expiryDate)}` : ""}</span>{canEdit ? <div className="flex flex-wrap justify-end gap-2">{!batch.expiryDate ? <form action={assignBatchExpiryAction.bind(null, batch.id)} className="flex gap-2"><input aria-label={`Expiry for ${product.name}`} name="expiryDate" type="date" className="h-8 rounded-md border border-border bg-card px-2 text-[11px]" required /><button className="h-8 rounded-md border border-border px-2 text-[11px]">Set expiry</button></form> : null}<form action={writeOffBatchAction.bind(null, batch.id)} className="flex gap-2"><input aria-label={`Write off ${product.name}`} name="measuredQuantity" type="number" min="0.001" max={remaining} step="0.001" placeholder="Amount" className="h-8 w-24 rounded-md border border-border bg-card px-2 text-[11px]" required /><input type="hidden" name="reason" value="Batch write-off" /><button className="h-8 rounded-md border border-border px-2 text-[11px]">Write off</button></form></div> : null}</div>;
+          return <div key={batch.id} className="grid gap-3 rounded-lg border border-border p-3 text-xs lg:grid-cols-[1fr_150px_160px_minmax(260px,auto)] lg:items-center"><div><strong>{product.name}</strong><p className="mt-1 font-mono text-[10px] text-muted-foreground">{batch.id}</p></div><span>{formatQuantity(product, remaining)}</span><span className={cn(status === "Expired" && "text-destructive", status === "Usable" && "text-emerald-700")}>{status}{batch.expiryDate ? ` · ${dateOnly(batch.expiryDate)}` : ""}</span>{canAssignExpiry || canWriteOff ? <div className="flex flex-wrap justify-end gap-2">{canAssignExpiry && !batch.expiryDate ? <form action={assignBatchExpiryAction.bind(null, batch.id)} className="flex gap-2"><input aria-label={`Expiry for ${product.name}`} name="expiryDate" type="date" className="h-8 rounded-md border border-border bg-card px-2 text-[11px]" required /><button className="h-8 rounded-md border border-border px-2 text-[11px]">Set expiry</button></form> : null}{canWriteOff ? <form action={writeOffBatchAction.bind(null, batch.id)} className="flex gap-2"><input aria-label={`Write off ${product.name}`} name="measuredQuantity" type="number" min="0.001" max={remaining} step="0.001" placeholder="Amount" className="h-8 w-24 rounded-md border border-border bg-card px-2 text-[11px]" required /><input type="hidden" name="reason" value="Batch write-off" /><button className="h-8 rounded-md border border-border px-2 text-[11px]">Write off</button></form> : null}</div> : null}</div>;
         }))}</div>
       </Surface>
     </PageContainer>

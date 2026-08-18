@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { PageContainer, Surface } from "@/components/pos/primitives";
-import { canAccess, requirePageAccess } from "@/lib/authorization";
+import { authorizedRegisterIds, can, canAccessRegister, requireCapability } from "@/lib/authorization";
 import { formatMvr } from "@/lib/pos/money";
 import { getRegisterManagementData } from "@/lib/pos/queries";
 import { cn } from "@/lib/utils";
@@ -35,14 +35,16 @@ export default async function RegisterManagementPage({
   params: Promise<{ registerId: string }>;
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const authorization = await requirePageAccess("REGISTERS");
-  const canEdit = canAccess(authorization, "REGISTERS", "EDIT");
+  const authorization = await requireCapability("REGISTERS_VIEW", "REGISTER_PAGE");
   const { registerId } = await params;
+  if (!canAccessRegister(authorization, registerId)) notFound();
   const query = await searchParams;
-  const data = await getRegisterManagementData(registerId, single(query.receipt));
+  const data = await getRegisterManagementData(registerId, single(query.receipt), authorizedRegisterIds(authorization));
   if (!data) notFound();
 
   const { register, shift, lastSale } = data;
+  const ownsShift = shift?.openedBy.id === authorization.user.id;
+  const mayOperateShift = Boolean(ownsShift || can(authorization, "SHIFT_OVERRIDE"));
   const success = single(query.success);
   const error = single(query.error);
   const selectedHeldOrderId = single(query.order);
@@ -102,7 +104,7 @@ export default async function RegisterManagementPage({
         </div>
 
         <div className="flex flex-wrap gap-2.5">
-          {register.purpose === "RESTAURANT" ? (
+          {register.purpose === "RESTAURANT" && can(authorization, "RESTAURANT_FLOOR_VIEW") ? (
             <Link
               prefetch={false}
               href={`/registers/${register.id}/restaurant`}
@@ -116,7 +118,7 @@ export default async function RegisterManagementPage({
               registerId={register.id}
               shiftId={shift.id}
               expectedCashLaari={cashExpectedLaari}
-              canEdit={canEdit}
+              canEdit={mayOperateShift && can(authorization, "SHIFT_CLOSE")}
             />
           ) : null}
         </div>
@@ -151,6 +153,9 @@ export default async function RegisterManagementPage({
           <RegisterSaleWorkspace
             key={`${lastSale?.id ?? "empty"}:${creditedBillId ?? "no-credit"}:${data.heldOrders.map((order) => order.id).join(",")}`}
             registerId={register.id}
+            registerName={register.name}
+            registerCode={register.code}
+            cashierName={authorization.user.name}
             shiftId={shift.id}
             items={data.items}
             isRestaurant={register.purpose === "RESTAURANT"}
@@ -160,7 +165,12 @@ export default async function RegisterManagementPage({
               ...order,
               heldAt: order.heldAt.toISOString(),
             }))}
-            canEdit={canEdit}
+            permissions={{
+              sale: mayOperateShift && can(authorization, "SALE_RECORD"),
+              hold: mayOperateShift && can(authorization, "ORDER_HOLD"),
+              cancel: mayOperateShift && can(authorization, "ORDER_CANCEL"),
+              credit: mayOperateShift && can(authorization, "CUSTOMER_CREDIT_ISSUE"),
+            }}
             initialHeldOrderId={selectedHeldOrderId}
           />
         </>
@@ -173,7 +183,7 @@ export default async function RegisterManagementPage({
                 Set the opening cash balance before recording sales or holding orders at this register.
               </p>
             </div>
-            {canEdit ? (
+            {can(authorization, "SHIFT_OPEN") ? (
               <form action={openShiftAction.bind(null, register.id)} className="flex items-end gap-2">
                 <label className="grid gap-1.5 text-left text-[10px] tracking-[0.08em] text-muted-foreground">
                   OPENING CASH (MVR)

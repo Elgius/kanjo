@@ -1,10 +1,11 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { notFound } from "next/navigation";
 import { Search } from "lucide-react";
 
 import { MetricCard, PageContainer, PageHeader, Surface } from "@/components/pos/primitives";
 import type { PaymentMethod } from "@/generated/prisma/enums";
-import { requirePageAccess } from "@/lib/authorization";
+import { authorizedRegisterIds, canAccessRegister, requireCapability } from "@/lib/authorization";
 import { getBillHistoryOverview, type BillHistoryFilters } from "@/lib/pos/bills";
 import { formatMvr } from "@/lib/pos/money";
 import { BillHistoryTable } from "./bill-history-table";
@@ -24,7 +25,7 @@ export default async function BillHistoryPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  await requirePageAccess("BILL_HISTORY");
+  const authorization = await requireCapability("BILL_HISTORY_VIEW", "BILL_HISTORY_PAGE");
   const params = await searchParams;
   const rawFilters: BillHistoryFilters = {
     query: single(params.query),
@@ -35,7 +36,8 @@ export default async function BillHistoryPage({
     dateTo: single(params.dateTo),
     timeTo: single(params.timeTo),
   };
-  const data = await getBillHistoryOverview(rawFilters);
+  if (rawFilters.registerId && !canAccessRegister(authorization, rawFilters.registerId)) notFound();
+  const data = await getBillHistoryOverview(rawFilters, authorizedRegisterIds(authorization));
 
   return (
     <PageContainer className="gap-[22px]">

@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { CAPABILITY_KEYS, legacyPermissionProjection, PAGE_KEYS } from "@/lib/permissions";
 import { seedProducts, seedRegisters } from "./seed-data";
 
 const seedUser = {
@@ -8,25 +9,28 @@ const seedUser = {
 };
 
 async function main() {
+  const fullAccessProjection = legacyPermissionProjection(CAPABILITY_KEYS);
+  const legacyPermissions = PAGE_KEYS.map((page) => ({ page, level: fullAccessProjection[page] }));
   const fullAccessRole = await prisma.role.upsert({
     where: { normalizedName: "full access" },
-    update: {},
+    update: {
+      registerScopeMode: "ALL",
+      capabilities: {
+        createMany: {
+          data: CAPABILITY_KEYS.map((capability) => ({ capability })),
+          skipDuplicates: true,
+        },
+      },
+    },
     create: {
       name: "Full Access",
       normalizedName: "full access",
       description: "Default role for seeded POS data.",
+      registerScopeMode: "ALL",
       permissions: {
-        create: [
-          { page: "OVERVIEW", level: "VIEW" },
-          { page: "REGISTERS", level: "EDIT" },
-          { page: "INVENTORY", level: "EDIT" },
-          { page: "STOCK", level: "VIEW" },
-          { page: "REPORTING", level: "VIEW" },
-          { page: "BILL_HISTORY", level: "VIEW" },
-          { page: "SETTINGS", level: "VIEW" },
-          { page: "AUDIT_LOG", level: "VIEW" },
-        ],
+        create: legacyPermissions,
       },
+      capabilities: { create: CAPABILITY_KEYS.map((capability) => ({ capability })) },
     },
     select: { id: true },
   });

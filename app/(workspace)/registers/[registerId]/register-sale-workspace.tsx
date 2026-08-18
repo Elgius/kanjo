@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
-import { Minus, Plus, Search } from "lucide-react";
+import { Minus, Plus, Printer, Search } from "lucide-react";
 import Link from "next/link";
 import { useFormStatus } from "react-dom";
 
@@ -48,7 +48,7 @@ type CreditCustomer = {
 type PaymentMethod = "CASH" | "CARD" | "MOBILE";
 
 function SubmitButtons({
-  canEdit,
+  permissions,
   totalLaari,
   physicalHoldAction,
   creditHoldAction,
@@ -56,7 +56,7 @@ function SubmitButtons({
   creditCustomers,
   paymentMethod,
 }: {
-  canEdit: boolean;
+  permissions: { sale: boolean; hold: boolean; credit: boolean };
   totalLaari: number;
   physicalHoldAction: (formData: FormData) => void;
   creditHoldAction: (formData: FormData) => void;
@@ -76,14 +76,14 @@ function SubmitButtons({
       <button
         type="button"
         onClick={() => dialogRef.current?.showModal()}
-        disabled={!canEdit || pending || totalLaari === 0}
+        disabled={(!permissions.hold && !permissions.credit) || pending || totalLaari === 0}
         className="rounded-[9px] border border-border text-[11px] font-semibold disabled:opacity-45"
       >
         Hold
       </button>
       <button
         type="submit"
-        disabled={!canEdit || pending || totalLaari === 0}
+        disabled={!permissions.sale || pending || totalLaari === 0}
         className="flex items-center justify-between rounded-[9px] bg-chart-1 px-[17px] text-xs font-bold text-white disabled:opacity-45"
       >
         <span>{pending ? "Processing…" : `Charge ${paymentLabel}`}</span>
@@ -94,16 +94,16 @@ function SubmitButtons({
         <div className="grid gap-4 p-5 sm:p-6">
           <header><p className="text-xs text-muted-foreground">Pause this bill</p><h2 className="mt-1 font-serif text-2xl font-semibold">How should it be held?</h2></header>
           <div className="grid gap-3 sm:grid-cols-2">
-            <section className="flex flex-col justify-between gap-5 rounded-xl border border-border p-4">
+            {permissions.hold ? <section className="flex flex-col justify-between gap-5 rounded-xl border border-border p-4">
               <div><h3 className="text-sm font-semibold">Physical</h3><p className="mt-1 text-[11px] leading-5 text-muted-foreground">Keep the bill as a tab. Stock is deducted only when the customer returns and pays.</p></div>
               <button type="submit" formAction={physicalHoldAction} disabled={pending || !holdReady} className="h-10 rounded-lg bg-primary px-4 text-xs font-semibold text-primary-foreground disabled:opacity-45">Hold as tab</button>
               {!holdReady ? <p className="text-[10px] text-chart-1">Select a restaurant table first.</p> : null}
-            </section>
-            <section className="flex flex-col justify-between gap-4 rounded-xl border border-chart-1/40 bg-chart-1/5 p-4">
+            </section> : null}
+            {permissions.credit ? <section className="flex flex-col justify-between gap-4 rounded-xl border border-chart-1/40 bg-chart-1/5 p-4">
               <div><h3 className="text-sm font-semibold">Customer credit</h3><p className="mt-1 text-[11px] leading-5 text-muted-foreground">Deduct stock now and send the unpaid bill to a customer account.</p></div>
               {creditCustomers.length ? <label className="grid gap-1.5 text-[9px] text-muted-foreground">CUSTOMER<select name="customerId" value={customerId} onChange={(event) => setCustomerId(event.target.value)} className="h-10 min-w-0 rounded-lg border border-border bg-background px-3 text-xs text-foreground"><option value="">Select customer</option>{creditCustomers.map((customer) => <option key={customer.id} value={customer.id} disabled={customer.availableCreditLaari < totalLaari}>{customer.name} · {formatMvr(customer.availableCreditLaari)} available{customer.availableCreditLaari < totalLaari ? " · Limit exceeded" : ""}</option>)}</select></label> : <Link href="/customers" className="flex h-10 items-center justify-center rounded-lg border border-border px-3 text-[11px] font-semibold">Create a customer first</Link>}
               <button type="submit" formAction={creditHoldAction} disabled={pending || !creditReady} className="h-10 rounded-lg bg-chart-1 px-4 text-xs font-semibold text-white disabled:opacity-45">Use customer credit</button>
-            </section>
+            </section> : null}
           </div>
           <button type="button" onClick={() => dialogRef.current?.close()} className="h-9 justify-self-end rounded-lg border border-border px-3 text-[11px] font-semibold">Cancel</button>
         </div>
@@ -114,25 +114,32 @@ function SubmitButtons({
 
 export function RegisterSaleWorkspace({
   registerId,
+  registerName,
+  registerCode,
+  cashierName,
   shiftId,
   items,
   isRestaurant,
   restaurantTables,
   creditCustomers,
   heldOrders,
-  canEdit,
+  permissions,
   initialHeldOrderId,
 }: {
   registerId: string;
+  registerName: string;
+  registerCode: string;
+  cashierName: string;
   shiftId: string;
   items: SellableItem[];
   isRestaurant: boolean;
   restaurantTables: RestaurantTable[];
   creditCustomers: CreditCustomer[];
   heldOrders: HeldOrder[];
-  canEdit: boolean;
+  permissions: { sale: boolean; hold: boolean; cancel: boolean; credit: boolean };
   initialHeldOrderId?: string;
 }) {
+  const canOperate = permissions.sale || permissions.hold || permissions.credit;
   const initialOrder = heldOrders.find((order) => order.id === initialHeldOrderId);
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("all");
@@ -148,6 +155,9 @@ export function RegisterSaleWorkspace({
     Object.fromEntries(initialOrder?.items.map((item) => [item.itemId, item.quantity]) ?? []),
   );
   const activeHeldOrder = heldOrders.find((order) => order.id === heldOrderId);
+  const selectedRestaurantTable = restaurantTables.find(
+    (table) => table.id === restaurantTableId,
+  );
 
   const categories = useMemo(() => {
     const counts = new Map<string, number>();
@@ -292,7 +302,7 @@ export function RegisterSaleWorkspace({
                   <button
                     type="button"
                     onClick={() => setQuantity(item, quantity + 1)}
-                    disabled={!canEdit || soldOut || quantity >= item.stockQuantity}
+                    disabled={!canOperate || soldOut || quantity >= item.stockQuantity}
                     aria-label={`Add ${item.name}`}
                     className="flex size-6 items-center justify-center rounded-[7px] bg-primary text-primary-foreground disabled:bg-secondary disabled:text-muted-foreground"
                   >
@@ -334,7 +344,7 @@ export function RegisterSaleWorkspace({
             <p className="mt-1 font-mono text-[10px] leading-[13px] text-muted-foreground">{activeHeldOrder ? `HELD TAB · ${activeHeldOrder.id.slice(0, 6).toUpperCase()}` : "NEW ORDER"}</p>
           </div>
           <div className="flex items-center gap-2">
-            {heldOrderId ? (
+            {heldOrderId && permissions.cancel ? (
               <button
                 type="submit"
                 formAction={cancelAction}
@@ -354,6 +364,16 @@ export function RegisterSaleWorkspace({
               className="h-[30px] rounded-[7px] border border-border px-2.5 text-[10px] text-muted-foreground"
             >
               Clear
+            </button>
+            <button
+              type="button"
+              onClick={() => window.print()}
+              disabled={!cartLines.length}
+              aria-label="Print unpaid bill"
+              title={cartLines.length ? "Print unpaid bill" : "Add an item before printing"}
+              className="flex size-[30px] items-center justify-center rounded-[7px] border border-border text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <Printer className="size-3.5" aria-hidden="true" />
             </button>
           </div>
         </div>
@@ -481,7 +501,7 @@ export function RegisterSaleWorkspace({
             )
           ) : null}
           <SubmitButtons
-            canEdit={canEdit}
+            permissions={permissions}
             totalLaari={totalLaari}
             physicalHoldAction={holdAction}
             creditHoldAction={creditHoldAction}
@@ -489,11 +509,83 @@ export function RegisterSaleWorkspace({
             creditCustomers={creditCustomers}
             paymentMethod={paymentMethod}
           />
-          {!canEdit ? (
+          {!canOperate ? (
             <p className="text-center text-[10px] text-muted-foreground">VIEW ONLY</p>
           ) : null}
         </div>
       </form>
+
+      <article className="current-order-print-root pointer-events-none fixed -left-[10000px] top-0 w-[48mm] bg-white font-mono text-[10px] leading-[1.35] text-black">
+        <header className="border-b border-dashed border-black pb-2 text-center">
+          <h1 className="text-sm font-bold">KANJO</h1>
+          <p className="mt-1">{registerName}</p>
+          <p>{registerCode}</p>
+        </header>
+        <div className="border-b border-dashed border-black py-2">
+          <div className="flex justify-between gap-2">
+            <span>Bill</span>
+            <strong>
+              {activeHeldOrder
+                ? `HELD ${activeHeldOrder.id.slice(0, 6).toUpperCase()}`
+                : "NEW ORDER"}
+            </strong>
+          </div>
+          <div className="flex justify-between gap-2">
+            <span>Cashier</span>
+            <span className="truncate text-right">{cashierName}</span>
+          </div>
+          {selectedRestaurantTable ? (
+            <div className="flex justify-between gap-2">
+              <span>Table</span>
+              <span className="text-right">{selectedRestaurantTable.name}</span>
+            </div>
+          ) : null}
+          {customerNote.trim() ? (
+            <div className="mt-1">
+              <span>Note</span>
+              <p className="break-words">{customerNote.trim()}</p>
+            </div>
+          ) : null}
+        </div>
+        <div className="grid gap-2 border-b border-dashed border-black py-2">
+          {cartLines.map((item) => (
+            <div key={item.id}>
+              <div className="flex justify-between gap-2 font-bold">
+                <span className="min-w-0 break-words">{item.name}</span>
+                <span className="shrink-0">
+                  {formatMvr(item.retailPriceLaari * item.quantity)}
+                </span>
+              </div>
+              <div className="flex justify-between gap-2">
+                <span>{item.quantity} × {formatMvr(item.retailPriceLaari)}</span>
+                {item.sku ? <span>{item.sku}</span> : null}
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="grid gap-1 py-2">
+          <div className="flex justify-between">
+            <span>Subtotal · {itemCount} items</span>
+            <span>{formatMvr(totalLaari)}</span>
+          </div>
+          <div className="flex justify-between">
+            <span>Tax</span>
+            <span>Included</span>
+          </div>
+          <div className="flex justify-between text-xs font-bold">
+            <span>TOTAL</span>
+            <span>{formatMvr(totalLaari)}</span>
+          </div>
+          <div className="flex justify-between">
+            <span>Payment</span>
+            <span>Pending</span>
+          </div>
+        </div>
+        <footer className="border-t border-dashed border-black pt-2 text-center">
+          <p className="text-sm font-black tracking-[0.18em]">UNPAID</p>
+          <p className="mt-1">Powered by Kanjo</p>
+        </footer>
+      </article>
       </section>
     </div>
   );

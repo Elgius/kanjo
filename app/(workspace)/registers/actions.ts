@@ -6,7 +6,12 @@ import { redirect } from "next/navigation";
 
 import { prisma } from "@/lib/db";
 import { getAuditRequestContext, safeWriteAudit, writeAudit } from "@/lib/audit";
-import { requireActionAccess, type AuthorizationContext } from "@/lib/authorization";
+import {
+  requireGlobalOperation,
+  requireRegisterOperation,
+  requireShiftPolicy,
+  type AuthorizationContext,
+} from "@/lib/authorization";
 import { PosError, recordSale } from "@/lib/pos/sales";
 import { createRegisterWithGeneratedCode } from "@/lib/pos/registers";
 import {
@@ -59,7 +64,7 @@ async function auditFailure(
 }
 
 export async function createRegisterAction(formData: FormData) {
-  const authorization = await requireActionAccess("REGISTERS", "REGISTER_CREATE");
+  const authorization = await requireGlobalOperation("REGISTER_CREATE");
   const parsed = parseRegisterForm(formData);
   if (!parsed.ok) {
     await auditFailure(authorization, "REGISTER_CREATE", parsed.error);
@@ -98,7 +103,7 @@ export async function createRegisterAction(formData: FormData) {
 }
 
 export async function openShiftAction(registerId: string, formData: FormData) {
-  const authorization = await requireActionAccess("REGISTERS", "SHIFT_OPEN");
+  const authorization = await requireRegisterOperation("SHIFT_OPEN", registerId);
   const parsed = parseOpeningCash(formData);
   if (!parsed.ok) {
     await auditFailure(authorization, "SHIFT_OPEN", parsed.error, { registerId });
@@ -137,7 +142,8 @@ export async function openShiftAction(registerId: string, formData: FormData) {
 }
 
 export async function closeShiftAction(shiftId: string, registerId: string, formData: FormData) {
-  const authorization = await requireActionAccess("REGISTERS", "SHIFT_CLOSE");
+  const { authorization, shift } = await requireShiftPolicy("SHIFT_CLOSE", shiftId);
+  if (shift.registerId !== registerId) registersRedirect("error", "That shift does not belong to this register.", shift.registerId);
   const parsed = parseClosingCash(formData);
   if (!parsed.ok) {
     await auditFailure(authorization, "SHIFT_CLOSE", parsed.error, { shiftId, registerId });
@@ -189,7 +195,8 @@ export async function closeShiftAction(shiftId: string, registerId: string, form
 }
 
 export async function recordSaleAction(shiftId: string, registerId: string, formData: FormData) {
-  const authorization = await requireActionAccess("REGISTERS", "SALE_RECORD");
+  const { authorization, shift } = await requireShiftPolicy("SALE_RECORD", shiftId);
+  if (shift.registerId !== registerId) registersRedirect("error", "That shift does not belong to this register.", shift.registerId);
   const parsed = parseSaleForm(formData);
   if (!parsed.ok) {
     await auditFailure(authorization, "SALE_RECORD", parsed.error, { shiftId, registerId });

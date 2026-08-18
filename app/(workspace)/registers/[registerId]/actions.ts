@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 import { getAuditRequestContext, safeWriteAudit } from "@/lib/audit";
-import { requireActionAccess, type AuthorizationContext } from "@/lib/authorization";
+import { requireShiftPolicy, type AuthorizationContext } from "@/lib/authorization";
 import { prisma } from "@/lib/db";
 import { issueCustomerCredit } from "@/lib/pos/customers";
 import { holdRegisterOrder } from "@/lib/pos/orders";
@@ -60,7 +60,8 @@ export async function checkoutRegisterSaleAction(
   registerId: string,
   formData: FormData,
 ) {
-  const authorization = await requireActionAccess("REGISTERS", "SALE_RECORD");
+  const { authorization, shift } = await requireShiftPolicy("SALE_RECORD", shiftId);
+  if (shift.registerId !== registerId) registerRedirect(shift.registerId, "error", "That shift does not belong to this register.");
   const parsed = parseRegisterCartForm(formData);
   if (!parsed.ok) {
     await auditFailure(authorization, "SALE_RECORD", parsed.error, { shiftId, registerId });
@@ -102,7 +103,8 @@ export async function holdRegisterOrderAction(
   registerId: string,
   formData: FormData,
 ) {
-  const authorization = await requireActionAccess("REGISTERS", "SALE_RECORD");
+  const { authorization, shift } = await requireShiftPolicy("REGISTER_ORDER_HOLD", shiftId);
+  if (shift.registerId !== registerId) registerRedirect(shift.registerId, "error", "That shift does not belong to this register.");
   const parsed = parseRegisterCartForm(formData);
   if (!parsed.ok) {
     await auditFailure(authorization, "REGISTER_ORDER_HOLD", parsed.error, { shiftId, registerId });
@@ -138,7 +140,8 @@ export async function creditRegisterBillAction(
   registerId: string,
   formData: FormData,
 ) {
-  const authorization = await requireActionAccess("REGISTERS", "CUSTOMER_CREDIT_ISSUE");
+  const { authorization, shift } = await requireShiftPolicy("CUSTOMER_CREDIT_ISSUE", shiftId);
+  if (shift.registerId !== registerId) registerRedirect(shift.registerId, "error", "That shift does not belong to this register.");
   const parsed = parseRegisterCartForm(formData);
   if (!parsed.ok) {
     await auditFailure(authorization, "CUSTOMER_CREDIT_ISSUE", parsed.error, { shiftId, registerId });
@@ -186,7 +189,8 @@ export async function cancelHeldOrderAction(
   registerId: string,
   heldOrderId: string,
 ) {
-  const authorization = await requireActionAccess("REGISTERS", "REGISTER_ORDER_CANCEL");
+  const { authorization, shift } = await requireShiftPolicy("REGISTER_ORDER_CANCEL", shiftId);
+  if (shift.registerId !== registerId) registerRedirect(shift.registerId, "error", "That shift does not belong to this register.");
   if (!heldOrderId) registerRedirect(registerId, "error", "Select a held bill to cancel.");
 
   try {

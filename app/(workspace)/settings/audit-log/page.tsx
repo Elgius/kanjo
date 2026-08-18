@@ -3,7 +3,7 @@ import { ChevronLeft, ChevronRight, Search } from "lucide-react";
 
 import { PageContainer, PageHeader, Surface } from "@/components/pos/primitives";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { requirePageAccess } from "@/lib/authorization";
+import { requireCapability } from "@/lib/authorization";
 import { getAuditFilterOptions, getAuditLogPage, type AuditLogFilters } from "@/lib/audit-log";
 import { PAGE_DEFINITIONS } from "@/lib/permissions";
 import { cn } from "@/lib/utils";
@@ -29,7 +29,7 @@ function formatDateTime(date: Date) {
 const fieldClass = "h-10 rounded-lg border border-border bg-card px-3 text-xs outline-none focus:border-ring focus:ring-2 focus:ring-ring/15";
 
 export default async function AuditLogPage({ searchParams }: PageProps<"/settings/audit-log">) {
-  await requirePageAccess("AUDIT_LOG");
+  await requireCapability("AUDIT_LOG_VIEW_ALL", "AUDIT_LOG_PAGE");
   const params = await searchParams;
   const filters: AuditLogFilters = {
     from: single(params.from), to: single(params.to), actor: single(params.actor),
