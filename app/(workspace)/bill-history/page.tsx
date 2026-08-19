@@ -52,7 +52,7 @@ export default async function BillHistoryPage({
         <MetricCard label="MATCHING SALES" value={formatMvr(data.totalLaari)} note="Completed bill total" dark />
       </section>
 
-      <form className="grid gap-2.5 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8" aria-label="Bill history filters">
+      <form className="grid items-end gap-2.5 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8" aria-label="Bill history filters">
         <label className="flex h-10 min-w-0 items-center gap-2 rounded-lg border border-border bg-card px-3 md:col-span-2">
           <Search className="size-3.5 text-muted-foreground" />
           <span className="sr-only">Search bills</span>

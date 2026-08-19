@@ -1,6 +1,6 @@
 import { AppShell } from "@/components/pos/app-shell";
 import { authorizedRegisterIds, can, canAccess, firstAccessiblePath, requireAuthorization } from "@/lib/authorization";
-import { PAGE_KEYS } from "@/lib/permissions";
+import { getRegisterNavigationVisibility, PAGE_KEYS } from "@/lib/permissions";
 import { getSidebarRegisters } from "@/lib/pos/queries";
 
 export default async function WorkspaceLayout({
@@ -19,11 +19,10 @@ export default async function WorkspaceLayout({
       user={authorization.user}
       registers={registers}
       allowedPages={allowedPages}
-      registerTree={{
-        selection: can(authorization, "REGISTERS_VIEW"),
-        sessions: can(authorization, "REGISTER_SESSIONS_VIEW"),
-        edit: can(authorization, "REGISTER_ADMIN_VIEW"),
-      }}
+      registerTree={getRegisterNavigationVisibility(
+        authorization.user.isSiteAdmin,
+        authorization.capabilities,
+      )}
       homeHref={firstAccessiblePath(authorization) ?? "/access-denied"}
     >
       {children}

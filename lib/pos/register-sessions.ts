@@ -2,6 +2,7 @@ import "server-only";
 
 import type { PaymentMethod, SaleStatus, ShiftStatus } from "@/generated/prisma/enums";
 import { prisma } from "@/lib/db";
+import { summarizeSessionDetails } from "@/lib/pos/session-details";
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -194,6 +195,7 @@ export async function getRegisterSession(registerId: string, sessionId: string, 
       varianceLaari:
         session.closingCashLaari === null ? null : session.closingCashLaari - expectedCashLaari,
     },
+    details: summarizeSessionDetails(session.sales),
     transactions: session.sales.map<SessionTransaction>((sale) => ({
       id: sale.id,
       receiptNumber: sale.receiptNumber.toString(),
