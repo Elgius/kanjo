@@ -8,6 +8,7 @@ import {
   capabilitiesFromLegacyPermissions,
   capabilityAllows,
   expandCapabilityDependencies,
+  getRegisterNavigationVisibility,
   legacyPermissionProjection,
   registerScopeAllows,
   validateCapabilitySelection,
@@ -51,6 +52,21 @@ describe("capability permissions", () => {
     expect(auditor.capabilities.includes("AUDIT_LOG_VIEW_ALL")).toBe(true);
     expect(auditor.capabilities.includes("SALE_RECORD")).toBe(false);
     expect(JSON.stringify([...full.capabilities].sort())).toBe(JSON.stringify([...CAPABILITY_KEYS].sort()));
+  });
+
+  test("register navigation uses exact session and rename capabilities", () => {
+    expect(JSON.stringify(getRegisterNavigationVisibility(false, new Set(["REGISTER_SESSIONS_VIEW"])))).toBe(
+      JSON.stringify({ selection: false, sessions: true, edit: false }),
+    );
+    expect(JSON.stringify(getRegisterNavigationVisibility(false, new Set(["REGISTER_ADMIN_VIEW"])))).toBe(
+      JSON.stringify({ selection: false, sessions: false, edit: false }),
+    );
+    expect(JSON.stringify(getRegisterNavigationVisibility(false, new Set(["REGISTER_RENAME"])))).toBe(
+      JSON.stringify({ selection: false, sessions: false, edit: true }),
+    );
+    expect(JSON.stringify(getRegisterNavigationVisibility(true, new Set()))).toBe(
+      JSON.stringify({ selection: true, sessions: true, edit: true }),
+    );
   });
 
   test("legacy translation preserves effective module access and rollback projection", () => {

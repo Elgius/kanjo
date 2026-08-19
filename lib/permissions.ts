@@ -41,7 +41,7 @@ export const CAPABILITY_DEFINITIONS = [
   { key: "OVERVIEW_VIEW", label: "View overview", description: "View overview totals for authorized registers.", group: "Read access", page: "OVERVIEW", scope: "REGISTER", mutation: false },
   { key: "REGISTERS_VIEW", label: "Select registers", description: "View and select authorized registers.", group: "Read access", page: "REGISTERS", scope: "REGISTER", mutation: false },
   { key: "REGISTER_ADMIN_VIEW", label: "View register administration", description: "View register configuration for authorized registers.", group: "Read access", page: "REGISTERS", scope: "REGISTER", mutation: false },
-  { key: "REGISTER_SESSIONS_VIEW", label: "View sessions", description: "View shifts and session transactions for authorized registers.", group: "Read access", page: "REGISTERS", scope: "REGISTER", mutation: false },
+  { key: "REGISTER_SESSIONS_VIEW", label: "View sessions", description: "Open session history and view shifts and transactions for authorized registers.", group: "Read access", page: "REGISTERS", scope: "REGISTER", mutation: false },
   { key: "RESTAURANT_MENU_VIEW", label: "View restaurant menus", description: "View menus for authorized restaurant registers.", group: "Read access", page: "REGISTERS", scope: "REGISTER", mutation: false },
   { key: "RESTAURANT_FLOOR_VIEW", label: "View restaurant floors", description: "View tables and their current bills.", group: "Read access", page: "REGISTERS", scope: "REGISTER", mutation: false },
   { key: "INVENTORY_VIEW", label: "View inventory", description: "View products for authorized registers.", group: "Read access", page: "INVENTORY", scope: "REGISTER", mutation: false },
@@ -180,6 +180,17 @@ export function capabilityAllows(
   capability: CapabilityKey,
 ) {
   return isSiteAdmin || capabilities.has(capability);
+}
+
+export function getRegisterNavigationVisibility(
+  isSiteAdmin: boolean,
+  capabilities: ReadonlySet<CapabilityKey>,
+) {
+  return {
+    selection: capabilityAllows(isSiteAdmin, capabilities, "REGISTERS_VIEW"),
+    sessions: capabilityAllows(isSiteAdmin, capabilities, "REGISTER_SESSIONS_VIEW"),
+    edit: capabilityAllows(isSiteAdmin, capabilities, "REGISTER_RENAME"),
+  };
 }
 
 export function registerScopeAllows(

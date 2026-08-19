@@ -3,11 +3,11 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 
-import { MetricCard, PageContainer, PageHeader, Surface } from "@/components/pos/primitives";
+import { MetricCard, PageContainer, Surface } from "@/components/pos/primitives";
 import { authorizedRegisterIds, requireCapability } from "@/lib/authorization";
 import { formatMvr } from "@/lib/pos/money";
 import { getRegisterSession } from "@/lib/pos/register-sessions";
-import { cn } from "@/lib/utils";
+import { SessionDetailMode } from "./session-detail-mode";
 import { SessionTransactions } from "./session-transactions";
 
 export const metadata: Metadata = {
@@ -48,11 +48,12 @@ export default async function RegisterSessionPage({
         {session.register.name} sessions
       </Link>
 
-      <PageHeader
+      <SessionDetailMode
         eyebrow={`Registers / Sessions / ${session.register.code}`}
         title={`Session · ${formatDateTime(session.openedAt)}`}
         description={`${session.status === "OPEN" ? "Open" : "Closed"} shift run by ${session.openedBy.name} · ${duration(session.openedAt, session.closedAt)}`}
-        actions={<span className={cn("flex h-9 items-center rounded-full px-3 text-[10px] font-semibold", session.status === "OPEN" ? "bg-chart-1/10 text-chart-1" : "bg-secondary text-muted-foreground")}><span className={cn("mr-2 size-1.5 rounded-full", session.status === "OPEN" ? "bg-chart-1" : "border border-muted-foreground")} />{session.status}</span>}
+        status={session.status}
+        details={session.details}
       />
 
       <section className="grid gap-3.5 sm:grid-cols-2 xl:grid-cols-4">
