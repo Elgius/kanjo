@@ -51,6 +51,9 @@ export const OPERATION_POLICIES = {
   ROLE_UPDATE: { siteAdmin: true, page: "SETTINGS", scope: "GLOBAL" },
   ROLE_DELETE: { siteAdmin: true, page: "SETTINGS", scope: "GLOBAL" },
   ACCOUNT_CREATE: { siteAdmin: true, page: "SETTINGS", scope: "GLOBAL" },
+  ACCOUNT_USERNAME_UPDATE: { siteAdmin: true, page: "SETTINGS", scope: "GLOBAL" },
+  ACCOUNT_PASSWORD_RESET: { siteAdmin: true, page: "SETTINGS", scope: "GLOBAL" },
+  ACCOUNT_DELETE: { siteAdmin: true, page: "SETTINGS", scope: "GLOBAL" },
   ACCOUNT_ROLE_ASSIGN: { siteAdmin: true, page: "SETTINGS", scope: "GLOBAL" },
   SITE_ADMIN_UPDATE: { siteAdmin: true, page: "SETTINGS", scope: "GLOBAL" },
 } as const satisfies Record<string, OperationPolicy>;

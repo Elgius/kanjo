@@ -5,8 +5,8 @@ import { cn } from "@/lib/utils";
 import {
   assignRoleAction,
   createAccountAction,
-  setSiteAdminAction,
 } from "./actions";
+import { TeamAccountActions } from "./team-account-actions";
 
 function single(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value;
@@ -24,6 +24,7 @@ export default async function SettingsPage({ searchParams }: PageProps<"/setting
   const params = await searchParams;
   const [accounts, roles] = await Promise.all([
     prisma.user.findMany({
+      where: { accounts: { some: {} } },
       orderBy: [{ username: "asc" }, { email: "asc" }],
       select: {
         id: true,
@@ -80,7 +81,7 @@ export default async function SettingsPage({ searchParams }: PageProps<"/setting
             {accounts.map((account) => {
               const label = account.username ?? account.email;
               return (
-                <article key={account.id} className="grid gap-4 py-5 lg:grid-cols-[minmax(220px,1fr)_minmax(210px,320px)_auto] lg:items-center">
+                <article key={account.id} className="grid gap-4 py-5 xl:grid-cols-[minmax(210px,1fr)_minmax(200px,280px)_minmax(300px,auto)] xl:items-center">
                   <div className="flex min-w-0 items-center gap-3">
                     <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-secondary text-xs font-bold">{initials(label)}</span>
                     <span className="min-w-0"><span className="flex flex-wrap items-center gap-2"><span className="truncate text-sm font-semibold">{account.username ? `@${account.username}` : account.email}</span>{account.id === authorization.user.id ? <span className="text-[10px] text-chart-1">YOU</span> : null}{account.isSiteAdmin ? <span className="rounded-full bg-primary px-2 py-0.5 text-[9px] font-semibold text-primary-foreground">SITE ADMIN</span> : null}</span><span className="mt-1 block text-[10px] text-muted-foreground">{account.role.name} · Joined {account.createdAt.toLocaleDateString("en-MV")}</span></span>
@@ -92,12 +93,15 @@ export default async function SettingsPage({ searchParams }: PageProps<"/setting
                     </form>
                   ) : <span className="text-xs text-muted-foreground">{account.role.name}</span>}
                   {isSiteAdmin ? (
-                    <form action={setSiteAdminAction.bind(null, account.id)}>
-                      <input type="hidden" name="isSiteAdmin" value={account.isSiteAdmin ? "false" : "true"} />
-                      <button type="submit" className={cn("h-10 rounded-lg border px-3 text-[11px] font-semibold", account.isSiteAdmin ? "border-destructive/30 text-destructive hover:bg-destructive/10" : "border-border hover:bg-accent")}>
-                        {account.isSiteAdmin ? "Demote" : "Promote"}
-                      </button>
-                    </form>
+                    <TeamAccountActions
+                      account={{
+                        id: account.id,
+                        username: account.username,
+                        email: account.email,
+                        isSiteAdmin: account.isSiteAdmin,
+                      }}
+                      currentUserId={authorization.user.id}
+                    />
                   ) : null}
                 </article>
               );
