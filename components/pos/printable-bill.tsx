@@ -1,3 +1,8 @@
+"use client";
+
+import { useSyncExternalStore } from "react";
+import { createPortal } from "react-dom";
+
 import type { BillStatus, PaymentMethod } from "@/generated/prisma/enums";
 import { formatMvr } from "@/lib/pos/money";
 import { cn } from "@/lib/utils";
@@ -18,6 +23,29 @@ function paymentLabel(paymentMethod: PaymentMethod | null) {
     : paymentMethod[0] + paymentMethod.slice(1).toLowerCase();
 }
 
+export type PrintableBillProps = {
+  className?: string;
+  registerName: string;
+  registerCode: string;
+  billNumber: string;
+  receiptNumber?: string | null;
+  dateLabel?: string;
+  dateValue?: string | null;
+  cashierName: string;
+  tableName?: string | null;
+  customerNote?: string | null;
+  items: PrintableBillItem[];
+  subtotalLaari: number;
+  totalLaari: number;
+  paymentMethod: PaymentMethod | null;
+  status: BillStatus;
+  showIncludedTax?: boolean;
+};
+
+const subscribeToDocument = () => () => {};
+const getDocumentBody = () => document.body;
+const getServerDocumentBody = () => null;
+
 export function PrintableBill({
   className,
   registerName,
@@ -35,24 +63,7 @@ export function PrintableBill({
   paymentMethod,
   status,
   showIncludedTax = false,
-}: {
-  className?: string;
-  registerName: string;
-  registerCode: string;
-  billNumber: string;
-  receiptNumber?: string | null;
-  dateLabel?: string;
-  dateValue?: string | null;
-  cashierName: string;
-  tableName?: string | null;
-  customerNote?: string | null;
-  items: PrintableBillItem[];
-  subtotalLaari: number;
-  totalLaari: number;
-  paymentMethod: PaymentMethod | null;
-  status: BillStatus;
-  showIncludedTax?: boolean;
-}) {
+}: PrintableBillProps) {
   return (
     <article className={cn("w-[48mm] bg-white font-mono text-[10px] leading-[1.35] text-black", className)}>
       <header className="border-b border-dashed border-black pb-2 text-center">
@@ -88,4 +99,10 @@ export function PrintableBill({
       </footer>
     </article>
   );
+}
+
+export function PrintableBillPortal(props: PrintableBillProps) {
+  const portalRoot = useSyncExternalStore(subscribeToDocument, getDocumentBody, getServerDocumentBody);
+
+  return portalRoot ? createPortal(<PrintableBill {...props} />, portalRoot) : null;
 }

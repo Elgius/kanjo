@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Eye, LoaderCircle, Printer, X } from "lucide-react";
 
-import { PrintableBill } from "@/components/pos/printable-bill";
+import { PrintableBill, PrintableBillPortal, type PrintableBillProps } from "@/components/pos/printable-bill";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatMvr } from "@/lib/pos/money";
 import type { BillCursor, BillHistoryFilters, BillHistoryRow } from "@/lib/pos/bills";
@@ -39,6 +39,21 @@ function BillDialog({ bill, onClose }: { bill: BillHistoryRow; onClose: () => vo
     window.addEventListener("afterprint", () => document.body.removeAttribute("data-print-target"), { once: true });
     window.print();
   }
+  const printableBillProps = {
+    registerName: bill.registerName,
+    registerCode: bill.registerCode,
+    billNumber: bill.billNumber,
+    receiptNumber: bill.receiptNumber,
+    dateValue: formatDateTime(bill.openedAt),
+    cashierName: bill.paidByName ?? bill.openedByName,
+    tableName: bill.restaurantTableName,
+    customerNote: bill.customerNote,
+    items: bill.items.map((item, index) => ({ key: `${item.productId ?? item.menuItemId ?? item.productName}:${index}`, name: item.productName, sku: item.productSku, quantity: item.quantity, unitPriceLaari: item.unitPriceLaari, lineTotalLaari: item.lineTotalLaari })),
+    subtotalLaari: bill.subtotalLaari,
+    totalLaari: bill.totalLaari,
+    paymentMethod: bill.status === "UNPAID" || bill.status === "CANCELLED" ? null : bill.paymentMethod,
+    status: bill.status,
+  } satisfies PrintableBillProps;
 
   return (
     <dialog ref={dialogRef} onCancel={onClose} onClose={onClose} className="m-auto max-h-[calc(100vh-32px)] w-[min(760px,calc(100%-32px))] overflow-y-auto rounded-xl border border-border bg-card p-0 text-foreground shadow-xl backdrop:bg-black/35">
@@ -57,22 +72,7 @@ function BillDialog({ bill, onClose }: { bill: BillHistoryRow; onClose: () => vo
 
         <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(250px,0.8fr)]">
           <div className="flex justify-center rounded-lg border border-border bg-white p-4">
-            <PrintableBill
-              className="bill-history-print-root"
-              registerName={bill.registerName}
-              registerCode={bill.registerCode}
-              billNumber={bill.billNumber}
-              receiptNumber={bill.receiptNumber}
-              dateValue={formatDateTime(bill.openedAt)}
-              cashierName={bill.paidByName ?? bill.openedByName}
-              tableName={bill.restaurantTableName}
-              customerNote={bill.customerNote}
-              items={bill.items.map((item, index) => ({ key: `${item.productId ?? item.menuItemId ?? item.productName}:${index}`, name: item.productName, sku: item.productSku, quantity: item.quantity, unitPriceLaari: item.unitPriceLaari, lineTotalLaari: item.lineTotalLaari }))}
-              subtotalLaari={bill.subtotalLaari}
-              totalLaari={bill.totalLaari}
-              paymentMethod={bill.status === "UNPAID" || bill.status === "CANCELLED" ? null : bill.paymentMethod}
-              status={bill.status}
-            />
+            <PrintableBill {...printableBillProps} />
           </div>
 
           <section>
@@ -92,6 +92,7 @@ function BillDialog({ bill, onClose }: { bill: BillHistoryRow; onClose: () => vo
         </div>
 
         <div className="flex justify-end gap-2.5"><button type="button" onClick={() => dialogRef.current?.close()} className="h-10 rounded-lg border border-border px-4 text-xs font-semibold">Close</button><button type="button" onClick={print} className="flex h-10 items-center gap-2 rounded-lg bg-primary px-4 text-xs font-semibold text-primary-foreground"><Printer className="size-3.5" />Print bill</button></div>
+        <PrintableBillPortal {...printableBillProps} className="bill-history-print-root pointer-events-none fixed -left-[10000px] top-0" />
       </div>
     </dialog>
   );

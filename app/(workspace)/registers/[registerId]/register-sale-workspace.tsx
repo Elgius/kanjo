@@ -7,7 +7,7 @@ import { useRouter } from "next/navigation";
 import { flushSync } from "react-dom";
 import { useFormStatus } from "react-dom";
 
-import { PrintableBill } from "@/components/pos/printable-bill";
+import { PrintableBillPortal } from "@/components/pos/printable-bill";
 import type { BillStatus } from "@/generated/prisma/enums";
 import { formatMvr } from "@/lib/pos/money";
 import { cn } from "@/lib/utils";
@@ -634,7 +634,7 @@ export function RegisterSaleWorkspace({
         </div>
       </form>
 
-      <PrintableBill
+      <PrintableBillPortal
         className="current-order-print-root pointer-events-none fixed -left-[10000px] top-0"
         registerName={registerName}
         registerCode={registerCode}

@@ -3,7 +3,7 @@
 import { useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 
-import { PrintableBill } from "@/components/pos/printable-bill";
+import { PrintableBill, PrintableBillPortal, type PrintableBillProps } from "@/components/pos/printable-bill";
 import type { BillStatus } from "@/generated/prisma/enums";
 
 export type PrintableReceipt = {
@@ -59,6 +59,20 @@ export function ReceiptPrintDialog({
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(receipt.createdAt));
+  const printableBillProps = {
+    registerName,
+    registerCode,
+    billNumber: receipt.bill?.billNumber ?? receipt.receiptNumber,
+    receiptNumber: receipt.receiptNumber,
+    dateLabel: "Date",
+    dateValue: createdAt,
+    cashierName: receipt.createdBy.name,
+    items: receipt.items.map((item) => ({ key: item.id, name: item.productName, sku: item.productSku, quantity: item.quantity, unitPriceLaari: item.unitPriceLaari, lineTotalLaari: item.lineTotalLaari })),
+    subtotalLaari: receipt.subtotalLaari,
+    totalLaari: receipt.totalLaari,
+    paymentMethod: receipt.paymentMethod,
+    status: receipt.bill?.status ?? "PAID",
+  } satisfies PrintableBillProps;
 
   return (
     <dialog ref={dialogRef} onCancel={close} className="m-auto w-[min(520px,calc(100%-32px))] rounded-xl border border-border bg-card p-0 text-foreground shadow-xl backdrop:bg-black/35">
@@ -70,27 +84,14 @@ export function ReceiptPrintDialog({
         </div>
 
         <div className="flex justify-center rounded-lg border border-border bg-white p-4">
-          <PrintableBill
-            className="receipt-print-root"
-            registerName={registerName}
-            registerCode={registerCode}
-            billNumber={receipt.bill?.billNumber ?? receipt.receiptNumber}
-            receiptNumber={receipt.receiptNumber}
-            dateLabel="Date"
-            dateValue={createdAt}
-            cashierName={receipt.createdBy.name}
-            items={receipt.items.map((item) => ({ key: item.id, name: item.productName, sku: item.productSku, quantity: item.quantity, unitPriceLaari: item.unitPriceLaari, lineTotalLaari: item.lineTotalLaari }))}
-            subtotalLaari={receipt.subtotalLaari}
-            totalLaari={receipt.totalLaari}
-            paymentMethod={receipt.paymentMethod}
-            status={receipt.bill?.status ?? "PAID"}
-          />
+          <PrintableBill {...printableBillProps} />
         </div>
 
         <div className="flex justify-end gap-2.5">
           <button type="button" onClick={close} className="h-10 rounded-lg border border-border px-4 text-xs font-semibold">No, thanks</button>
           <button type="button" onClick={print} className="h-10 rounded-lg bg-primary px-4 text-xs font-semibold text-primary-foreground">Yes, print bill</button>
         </div>
+        <PrintableBillPortal {...printableBillProps} className="receipt-print-root pointer-events-none fixed -left-[10000px] top-0" />
       </div>
     </dialog>
   );
