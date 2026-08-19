@@ -4,7 +4,7 @@ import { notFound } from "next/navigation";
 import { Search } from "lucide-react";
 
 import { MetricCard, PageContainer, PageHeader, Surface } from "@/components/pos/primitives";
-import type { PaymentMethod } from "@/generated/prisma/enums";
+import type { BillStatus, PaymentMethod } from "@/generated/prisma/enums";
 import { authorizedRegisterIds, canAccessRegister, requireCapability } from "@/lib/authorization";
 import { getBillHistoryOverview, type BillHistoryFilters } from "@/lib/pos/bills";
 import { formatMvr } from "@/lib/pos/money";
@@ -31,6 +31,7 @@ export default async function BillHistoryPage({
     query: single(params.query),
     registerId: single(params.registerId),
     paymentMethod: single(params.paymentMethod) as PaymentMethod | undefined,
+    status: single(params.status) as BillStatus | undefined,
     dateFrom: single(params.dateFrom),
     timeFrom: single(params.timeFrom),
     dateTo: single(params.dateTo),
@@ -49,10 +50,10 @@ export default async function BillHistoryPage({
 
       <section className="grid gap-3 sm:grid-cols-2">
         <MetricCard label="MATCHING BILLS" value={data.totalBills.toLocaleString("en-MV")} note="Across selected filters" />
-        <MetricCard label="MATCHING SALES" value={formatMvr(data.totalLaari)} note="Completed bill total" dark />
+        <MetricCard label="PAID TOTAL" value={formatMvr(data.totalLaari)} note="Paid bills in selected filters" dark />
       </section>
 
-      <form className="grid items-end gap-2.5 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8" aria-label="Bill history filters">
+      <form className="grid items-end gap-2.5 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-9" aria-label="Bill history filters">
         <label className="flex h-10 min-w-0 items-center gap-2 rounded-lg border border-border bg-card px-3 md:col-span-2">
           <Search className="size-3.5 text-muted-foreground" />
           <span className="sr-only">Search bills</span>
@@ -68,11 +69,21 @@ export default async function BillHistoryPage({
           <option value="CARD">Card</option>
           <option value="MOBILE">Mobile pay</option>
         </select>
+        <select aria-label="Bill status" name="status" defaultValue={data.filters.status ?? ""} className={fieldClass}>
+          <option value="">All statuses</option>
+          <option value="UNPAID">Unpaid</option>
+          <option value="PAID">Paid</option>
+          <option value="AMENDED">Amended</option>
+          <option value="REVERSED">Reversed</option>
+          <option value="AMENDED">Amended</option>
+          <option value="REVERSED">Reversed</option>
+          <option value="CANCELLED">Cancelled</option>
+        </select>
         <label className="grid gap-1 text-[10px] text-muted-foreground"><span>FROM DATE</span><input aria-label="From date" name="dateFrom" type="date" defaultValue={data.filters.dateFrom} className={fieldClass} /></label>
         <label className="grid gap-1 text-[10px] text-muted-foreground"><span>FROM TIME</span><input aria-label="From time" name="timeFrom" type="time" defaultValue={data.filters.timeFrom} className={fieldClass} /></label>
         <label className="grid gap-1 text-[10px] text-muted-foreground"><span>TO DATE</span><input aria-label="To date" name="dateTo" type="date" defaultValue={data.filters.dateTo} className={fieldClass} /></label>
         <label className="grid gap-1 text-[10px] text-muted-foreground"><span>TO TIME</span><input aria-label="To time" name="timeTo" type="time" defaultValue={data.filters.timeTo} className={fieldClass} /></label>
-        <button type="submit" className="h-10 rounded-lg bg-primary px-4 text-xs font-semibold text-primary-foreground xl:col-start-7">Apply filters</button>
+        <button type="submit" className="h-10 rounded-lg bg-primary px-4 text-xs font-semibold text-primary-foreground xl:col-start-8">Apply filters</button>
         <Link prefetch={false} href="/bill-history" className="flex h-10 items-center justify-center rounded-lg border border-border bg-card px-4 text-xs font-semibold hover:bg-accent">Clear</Link>
       </form>
 

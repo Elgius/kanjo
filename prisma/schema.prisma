@@ -209,7 +209,26 @@ enum PaymentMethod {
 enum RegisterOrderStatus {
   HELD
   COMPLETED
+  CREDITED
   CANCELLED
+}
+
+enum BillStatus {
+  UNPAID
+  PAID
+  AMENDED
+  REVERSED
+  CANCELLED
+}
+
+enum BillRevisionKind {
+  INITIAL_PRINT
+  REPRINT
+  AMENDMENT
+  REVERSAL
+  CREDIT_ISSUED
+  PAYMENT
+  CANCELLATION
 }
 
 enum InventoryMovementType {
@@ -233,6 +252,7 @@ enum CustomerCreditStatus {
   OUTSTANDING
   PAID
   CANCELLED
+  REVERSED
 }
 
 model Product {
@@ -262,6 +282,8 @@ model Product {
   batches            InventoryBatch[]
   menuIngredients    MenuItemIngredient[]
   registerOrderItems RegisterOrderItem[]
+  saleItemComponents SaleItemStockComponent[]
+  inventoryConsumptions InventoryConsumption[]
 
   @@index([active, updatedAt(sort: Desc)])
   @@index([registerId, active, name])
@@ -383,6 +405,7 @@ model InventoryBatch {
   product           Product      @relation(fields: [productId], references: [id], onDelete: Restrict)
   register          CashRegister @relation(fields: [registerId], references: [id], onDelete: Restrict)
   receivedBy        User         @relation("BatchReceivedBy", fields: [receivedById], references: [id], onDelete: Restrict)
+  consumptions      InventoryConsumption[]
 
   @@index([registerId, expiryDate])
   @@map("inventory_batches")
@@ -402,6 +425,7 @@ model RegisterShift {
   openedBy           User                 @relation("ShiftOpenedBy", fields: [openedById], references: [id], onDelete: Restrict)
   closedBy           User?                @relation("ShiftClosedBy", fields: [closedById], references: [id], onDelete: Restrict)
   sales              Sale[]
+  bills              Bill[]
   registerOrders     RegisterOrder[]
   issuedCreditBills  CustomerCreditBill[] @relation("CreditBillIssuedShift")
   settledCreditBills CustomerCreditBill[] @relation("CreditBillSettledShift")
@@ -430,6 +454,7 @@ model Sale {
   registerOrder      RegisterOrder?
   bill               Bill?
   customerCreditBill CustomerCreditBill?
+  inventoryConsumptions InventoryConsumption[]
 
   @@index([status, createdAt(sort: Desc)])
   @@index([registerShiftId, createdAt(sort: Desc)])
@@ -438,25 +463,66 @@ model Sale {
 }
 
 model Bill {
-  id            String        @id @default(uuid()) @db.Uuid
-  saleId        String        @unique @db.Uuid
-  receiptNumber BigInt        @unique
-  registerId    String        @db.Uuid
-  registerName  String
-  registerCode  String
-  cashierName   String
-  paymentMethod PaymentMethod
-  subtotalLaari Int
-  totalLaari    Int
-  items         Json
-  soldAt        DateTime
-  createdAt     DateTime      @default(now())
-  sale          Sale          @relation(fields: [saleId], references: [id], onDelete: Restrict)
+  id                   String             @id @default(uuid()) @db.Uuid
+  billNumber           BigInt             @unique @default(autoincrement())
+  saleId               String?            @unique @db.Uuid
+  orderId              String?            @unique @db.Uuid
+  customerCreditBillId String?            @unique @db.Uuid
+  registerShiftId      String             @db.Uuid
+  receiptNumber        BigInt?            @unique
+  status               BillStatus         @default(PAID)
+  registerId           String             @db.Uuid
+  registerName         String
+  registerCode         String
+  cashierName          String
+  openedById           String
+  openedByName         String
+  paidById             String?
+  paidByName           String?
+  paymentMethod        PaymentMethod
+  subtotalLaari        Int
+  totalLaari           Int
+  items                Json
+  customerNote         String?
+  restaurantTableId    String?            @db.Uuid
+  restaurantTableName  String?
+  openedAt             DateTime           @default(now())
+  paidAt               DateTime?
+  cancelledAt          DateTime?
+  soldAt               DateTime?
+  version              Int                @default(1)
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+  sale                 Sale?              @relation(fields: [saleId], references: [id], onDelete: Restrict)
+  order                RegisterOrder?     @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  customerCreditBill   CustomerCreditBill? @relation(fields: [customerCreditBillId], references: [id], onDelete: Restrict)
+  registerShift        RegisterShift      @relation(fields: [registerShiftId], references: [id], onDelete: Restrict)
+  revisions            BillRevision[]
 
-  @@index([soldAt(sort: Desc), id(sort: Desc)])
-  @@index([registerId, soldAt(sort: Desc), id(sort: Desc)])
-  @@index([paymentMethod, soldAt(sort: Desc)])
+  @@index([openedAt(sort: Desc), id(sort: Desc)])
+  @@index([registerId, openedAt(sort: Desc), id(sort: Desc)])
+  @@index([registerShiftId, openedAt(sort: Desc), id(sort: Desc)])
+  @@index([status, openedAt(sort: Desc)])
+  @@index([paymentMethod, openedAt(sort: Desc)])
   @@map("bills")
+}
+
+model BillRevision {
+  id        String           @id @default(uuid()) @db.Uuid
+  billId    String           @db.Uuid
+  revision  Int
+  kind      BillRevisionKind
+  actorId   String
+  actorName String
+  changes   Json
+  snapshot  Json
+  metadata  Json?
+  createdAt DateTime         @default(now())
+  bill      Bill             @relation(fields: [billId], references: [id], onDelete: Cascade)
+
+  @@unique([billId, revision])
+  @@index([billId, createdAt])
+  @@map("bill_revisions")
 }
 
 model CustomerCreditBill {
@@ -485,6 +551,8 @@ model CustomerCreditBill {
   settledBy      User?                @relation("CreditBillSettledBy", fields: [settledById], references: [id], onDelete: Restrict)
   sale           Sale?                @relation(fields: [saleId], references: [id], onDelete: Restrict)
   stockMovements InventoryMovement[]
+  bill           Bill?
+  inventoryConsumptions InventoryConsumption[]
 
   @@index([customerId, status, issuedAt(sort: Desc)])
   @@index([registerId, status, issuedAt(sort: Desc)])
@@ -509,11 +577,25 @@ model SaleItem {
   sale           Sale      @relation(fields: [saleId], references: [id], onDelete: Cascade)
   product        Product?  @relation(fields: [productId], references: [id], onDelete: Restrict)
   menuItem       MenuItem? @relation(fields: [menuItemId], references: [id], onDelete: Restrict)
+  stockComponents SaleItemStockComponent[]
+  inventoryConsumptions InventoryConsumption[]
 
   @@index([saleId])
   @@index([productId])
   @@index([menuItemId])
   @@map("sale_items")
+}
+
+model SaleItemStockComponent {
+  saleItemId      String   @db.Uuid
+  productId       String   @db.Uuid
+  measuredPerItem Decimal  @db.Decimal(14, 3)
+  saleItem        SaleItem @relation(fields: [saleItemId], references: [id], onDelete: Cascade)
+  product         Product  @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@id([saleItemId, productId])
+  @@index([productId])
+  @@map("sale_item_stock_components")
 }
 
 model RegisterOrder {
@@ -537,6 +619,7 @@ model RegisterOrder {
   sale              Sale?               @relation(fields: [saleId], references: [id], onDelete: SetNull)
   restaurantTable   RestaurantTable?    @relation(fields: [restaurantTableId], references: [id], onDelete: Restrict)
   items             RegisterOrderItem[]
+  bill              Bill?
 
   @@index([registerShiftId, status, heldAt(sort: Desc)])
   @@index([createdById])
@@ -583,6 +666,7 @@ model InventoryMovement {
   sale                 Sale?                 @relation(fields: [saleId], references: [id], onDelete: Restrict)
   customerCreditBill   CustomerCreditBill?   @relation(fields: [customerCreditBillId], references: [id], onDelete: Restrict)
   createdBy            User                  @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  consumptions         InventoryConsumption[]
 
   @@index([productId, createdAt(sort: Desc)])
   @@index([createdAt(sort: Desc), id(sort: Desc)])
@@ -593,6 +677,36 @@ model InventoryMovement {
   @@index([createdById])
   @@index([searchText(ops: raw("gin_trgm_ops"))], type: Gin, map: "inventory_movements_search_text_trgm_idx")
   @@map("inventory_movements")
+}
+
+model InventoryConsumption {
+  id                   String              @id @default(uuid()) @db.Uuid
+  sourceLineId         String              @db.Uuid
+  saleId               String?             @db.Uuid
+  saleItemId           String?             @db.Uuid
+  customerCreditBillId String?             @db.Uuid
+  inventoryMovementId  String              @db.Uuid
+  productId            String              @db.Uuid
+  batchId              String              @db.Uuid
+  consumedQuantity     Decimal             @db.Decimal(14, 3)
+  restoredQuantity     Decimal             @default(0) @db.Decimal(14, 3)
+  retiredQuantity      Decimal             @default(0) @db.Decimal(14, 3)
+  createdAt            DateTime            @default(now())
+  sale                 Sale?               @relation(fields: [saleId], references: [id], onDelete: Restrict)
+  saleItem             SaleItem?           @relation(fields: [saleItemId], references: [id], onDelete: Restrict)
+  customerCreditBill   CustomerCreditBill? @relation(fields: [customerCreditBillId], references: [id], onDelete: Restrict)
+  inventoryMovement    InventoryMovement   @relation(fields: [inventoryMovementId], references: [id], onDelete: Restrict)
+  product              Product             @relation(fields: [productId], references: [id], onDelete: Restrict)
+  batch                InventoryBatch      @relation(fields: [batchId], references: [id], onDelete: Restrict)
+
+  @@index([sourceLineId])
+  @@index([saleId])
+  @@index([saleItemId])
+  @@index([customerCreditBillId])
+  @@index([inventoryMovementId])
+  @@index([productId])
+  @@index([batchId])
+  @@map("inventory_consumptions")
 }
 
 model Session {

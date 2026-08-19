@@ -6,6 +6,7 @@ databaseDescribe("restaurant recipe sale", () => {
   let db: PrismaClient;
   let recordSale: typeof import("@/lib/pos/sales").recordSale;
   let holdRegisterOrder: typeof import("@/lib/pos/orders").holdRegisterOrder;
+  let amendPaidBill: typeof import("@/lib/pos/bill-corrections").amendPaidBill;
   const marker = `restaurant-test-${crypto.randomUUID()}`;
   let userId = ""; let roleId = ""; let registerId = ""; let shiftId = ""; let coffeeId = ""; let eggId = ""; let menuItemId = ""; let categoryId = ""; let tableId = "";
 
@@ -16,6 +17,7 @@ databaseDescribe("restaurant recipe sale", () => {
     ({ prisma: db } = await import("@/lib/db"));
     ({ recordSale } = await import("@/lib/pos/sales"));
     ({ holdRegisterOrder } = await import("@/lib/pos/orders"));
+    ({ amendPaidBill } = await import("@/lib/pos/bill-corrections"));
     const role = await db.role.create({ data: { name: marker, normalizedName: marker } }); roleId = role.id;
     const user = await db.user.create({ data: { id: marker, name: "Restaurant Test", email: `${marker}@example.invalid`, roleId } }); userId = user.id;
     const register = await db.cashRegister.create({ data: { code: marker.toUpperCase(), name: marker, purpose: "RESTAURANT" } }); registerId = register.id;
@@ -39,6 +41,7 @@ databaseDescribe("restaurant recipe sale", () => {
   afterAll(async () => {
     if (!db) return;
     await db.auditLog.deleteMany({ where: { actorId: userId } });
+    await db.inventoryConsumption.deleteMany({ where: { sale: { createdById: userId } } });
     await db.inventoryMovement.deleteMany({ where: { createdById: userId } });
     await db.bill.deleteMany({ where: { sale: { createdById: userId } } });
     await db.sale.deleteMany({ where: { createdById: userId } });
@@ -141,5 +144,31 @@ databaseDescribe("restaurant recipe sale", () => {
       audit: { actorLabel: marker },
     });
     expect(nextOrder.status).toBe("HELD");
+  });
+
+  test("restores every snapshotted ingredient when a sold menu item is reduced", async () => {
+    await db.inventoryBatch.createMany({ data: [
+      { productId: coffeeId, registerId, receivedById: userId, receivedQuantity: 200, remainingQuantity: 200, expiryDate: day(60) },
+      { productId: eggId, registerId, receivedById: userId, receivedQuantity: 10, remainingQuantity: 10, expiryDate: day(60) },
+    ] });
+    const before = await db.inventoryBatch.findMany({ where: { productId: { in: [coffeeId, eggId] } }, select: { productId: true, remainingQuantity: true } });
+    const beforeTotals = new Map<string, number>();
+    for (const batch of before) beforeTotals.set(batch.productId, (beforeTotals.get(batch.productId) ?? 0) + Number(batch.remainingQuantity));
+    const sale = await recordSale(db, {
+      shiftId, createdById: userId, cashierName: "Restaurant Test", paymentMethod: "CARD",
+      items: [{ itemId: menuItemId, quantity: 2 }], audit: { actorLabel: marker },
+    });
+    const bill = await db.bill.findUniqueOrThrow({ where: { saleId: sale.id }, include: { sale: { include: { items: true } } } });
+    await amendPaidBill(db, {
+      billId: bill.id, registerId, sessionId: shiftId, expectedVersion: bill.version,
+      quantities: [{ saleItemId: bill.sale!.items[0].id, quantity: 1 }],
+      addedStock: { mode: "NONE", quantities: [] }, removedStock: { mode: "ALL", quantities: [] },
+      actorId: userId, actorName: "Restaurant Test", audit: { actorLabel: marker },
+    });
+    const after = await db.inventoryBatch.findMany({ where: { productId: { in: [coffeeId, eggId] } }, select: { productId: true, remainingQuantity: true } });
+    const afterTotals = new Map<string, number>();
+    for (const batch of after) afterTotals.set(batch.productId, (afterTotals.get(batch.productId) ?? 0) + Number(batch.remainingQuantity));
+    expect((beforeTotals.get(coffeeId) ?? 0) - (afterTotals.get(coffeeId) ?? 0)).toBe(50);
+    expect((beforeTotals.get(eggId) ?? 0) - (afterTotals.get(eggId) ?? 0)).toBe(2);
   });
 });

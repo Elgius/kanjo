@@ -391,7 +391,7 @@ export async function requireSiteAdminAction(event: OperationEvent) {
       summary: "Site administrator operation denied.",
       request: await getAuditRequestContext(),
     });
-    redirect(deniedPath.SETTINGS);
+    redirect(deniedPath[policy.page]);
   }
   return authorization;
 }

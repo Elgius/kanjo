@@ -3,16 +3,19 @@ import "server-only";
 import { Prisma, type PrismaClient } from "@/generated/prisma/client";
 import type { PaymentMethod } from "@/generated/prisma/enums";
 import { auditCreateData, type AuditRequestContext } from "@/lib/audit-core";
+import { eventChanges, snapshotJson, type BillSnapshot } from "@/lib/pos/bill-revisions";
 import { prisma } from "@/lib/db";
 import { measured } from "@/lib/pos/inventory";
 import {
+  allocateDeductionsToLines,
   deductRequirements,
   PosError,
   prepareSaleInventory,
-  type SaleLine,
+  saleItemCreateData,
+  type PersistedSaleLine,
 } from "@/lib/pos/sales";
 
-export type CreditBillItem = SaleLine;
+export type CreditBillItem = PersistedSaleLine;
 
 function parseCreditBillItems(value: Prisma.JsonValue): CreditBillItem[] {
   if (!Array.isArray(value)) throw new PosError("This customer bill has invalid item data.");
@@ -30,7 +33,19 @@ function parseCreditBillItems(value: Prisma.JsonValue): CreditBillItem[] {
     ) {
       throw new PosError("This customer bill has invalid item data.");
     }
+    const stockComponents = Array.isArray(item.stockComponents)
+      ? item.stockComponents.flatMap((raw) => {
+          if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
+          const component = raw as Record<string, Prisma.JsonValue>;
+          return typeof component.productId === "string"
+            && typeof component.productName === "string"
+            && typeof component.measuredPerItem === "number"
+            ? [{ productId: component.productId, productName: component.productName, measuredPerItem: component.measuredPerItem }]
+            : [];
+        })
+      : [];
     return {
+      id: typeof item.id === "string" ? item.id : crypto.randomUUID(),
       ...(typeof item.productId === "string" ? { productId: item.productId } : {}),
       ...(typeof item.menuItemId === "string" ? { menuItemId: item.menuItemId } : {}),
       productName: item.productName,
@@ -39,12 +54,14 @@ function parseCreditBillItems(value: Prisma.JsonValue): CreditBillItem[] {
       quantity: item.quantity,
       unitPriceLaari: item.unitPriceLaari,
       lineTotalLaari: item.lineTotalLaari,
+      stockComponents,
     };
   });
 }
 
-function snapshotItems(lines: SaleLine[]) {
+function snapshotItems(lines: readonly PersistedSaleLine[]) {
   return lines.map((line) => ({
+    id: line.id,
     productId: line.productId ?? null,
     menuItemId: line.menuItemId ?? null,
     productName: line.productName,
@@ -53,6 +70,7 @@ function snapshotItems(lines: SaleLine[]) {
     quantity: line.quantity,
     unitPriceLaari: line.unitPriceLaari,
     lineTotalLaari: line.lineTotalLaari,
+    stockComponents: line.stockComponents,
   }));
 }
 
@@ -86,13 +104,25 @@ export async function issueCustomerCredit(
     if (!shift) throw new PosError("The selected register does not have an open shift.");
     if (!customer) throw new PosError("Select an active customer for this credit bill.");
 
-    const [{ lines, requirements }, outstanding] = await Promise.all([
+    const [{ lines, requirements }, outstanding, trackedOrder] = await Promise.all([
       prepareSaleInventory(tx, shift, input.items),
       tx.customerCreditBill.aggregate({
         where: { customerId: customer.id, status: "OUTSTANDING" },
         _sum: { totalLaari: true },
       }),
+      input.heldOrderId
+        ? tx.registerOrder.findFirst({
+            where: { id: input.heldOrderId, registerShiftId: shift.id, status: "HELD" },
+            select: { id: true, bill: { select: {
+              id: true, version: true, status: true, paymentMethod: true, customerNote: true,
+              restaurantTableId: true, restaurantTableName: true, items: true,
+              subtotalLaari: true, totalLaari: true,
+            } } },
+          })
+        : Promise.resolve(null),
     ]);
+    if (input.heldOrderId && !trackedOrder) throw new PosError("That held bill is no longer available.");
+    const persistedLines: PersistedSaleLine[] = lines.map((line) => ({ ...line, id: crypto.randomUUID() }));
     const totalLaari = lines.reduce((total, line) => total + line.lineTotalLaari, 0);
     const outstandingLaari = outstanding._sum.totalLaari ?? 0;
     if (outstandingLaari + totalLaari > customer.creditLimitLaari) {
@@ -112,12 +142,14 @@ export async function issueCustomerCredit(
         createdById: input.createdById,
         subtotalLaari: totalLaari,
         totalLaari,
-        items: snapshotItems(lines),
+        items: snapshotItems(persistedLines),
         note: input.note?.trim().slice(0, 500) || null,
       },
       select: { id: true, customerId: true, totalLaari: true },
     });
 
+    const allocations = allocateDeductionsToLines(persistedLines, deductions);
+    const movementIds = new Map<string, string>();
     for (const requirement of requirements) {
       const aggregate = await tx.inventoryBatch.aggregate({
         where: { productId: requirement.productId, remainingQuantity: { gt: 0 } },
@@ -126,7 +158,7 @@ export async function issueCustomerCredit(
       const batchSummary = (deductions.get(requirement.productId) ?? [])
         .map((entry) => `${entry.batchId}:${entry.quantity}`)
         .join(", ");
-      await tx.inventoryMovement.create({
+      const movement = await tx.inventoryMovement.create({
         data: {
           productId: requirement.productId,
           registerId: shift.registerId,
@@ -137,8 +169,20 @@ export async function issueCustomerCredit(
           balanceAfter: aggregate._sum.remainingQuantity ?? new Prisma.Decimal(0),
           reason: `Customer credit bill ${creditBill.id.slice(0, 8).toUpperCase()} · batches ${batchSummary}`,
         },
+        select: { id: true },
       });
+      movementIds.set(requirement.productId, movement.id);
     }
+    await tx.inventoryConsumption.createMany({
+      data: allocations.map((allocation) => ({
+        sourceLineId: allocation.sourceLineId,
+        customerCreditBillId: creditBill.id,
+        inventoryMovementId: movementIds.get(allocation.productId)!,
+        productId: allocation.productId,
+        batchId: allocation.batchId,
+        consumedQuantity: measured(allocation.quantity),
+      })),
+    });
 
     if (input.heldOrderId) {
       const converted = await tx.registerOrder.updateMany({
@@ -147,9 +191,38 @@ export async function issueCustomerCredit(
           registerShiftId: shift.id,
           status: "HELD",
         },
-        data: { status: "CANCELLED", cancelledAt: new Date() },
+        data: { status: "CREDITED" },
       });
       if (converted.count !== 1) throw new PosError("That held bill is no longer available.");
+    }
+
+    if (trackedOrder?.bill) {
+      if (trackedOrder.bill.status !== "UNPAID") throw new PosError("That bill is no longer unpaid.");
+      const snapshot = {
+        items: trackedOrder.bill.items,
+        subtotalLaari: trackedOrder.bill.subtotalLaari,
+        totalLaari: trackedOrder.bill.totalLaari,
+        paymentMethod: trackedOrder.bill.paymentMethod,
+        customerNote: trackedOrder.bill.customerNote,
+        restaurantTableId: trackedOrder.bill.restaurantTableId,
+        restaurantTableName: trackedOrder.bill.restaurantTableName,
+      } as unknown as BillSnapshot;
+      const version = trackedOrder.bill.version + 1;
+      await tx.bill.update({
+        where: { id: trackedOrder.bill.id },
+        data: {
+          customerCreditBillId: creditBill.id,
+          version,
+          revisions: { create: {
+            revision: version,
+            kind: "CREDIT_ISSUED",
+            actorId: input.createdById,
+            actorName: input.audit.actorLabel,
+            changes: eventChanges("CREDIT_ISSUED", snapshot),
+            snapshot: snapshotJson(snapshot),
+          } },
+        },
+      });
     }
 
     await tx.auditLog.create({
@@ -200,6 +273,10 @@ export async function settleCustomerCredit(
         items: true,
         customer: { select: { name: true } },
         register: { select: { name: true, code: true } },
+        bill: { select: {
+          id: true, version: true, openedById: true, openedByName: true,
+          customerNote: true, restaurantTableId: true, restaurantTableName: true,
+        } },
       },
     });
     if (!creditBill) throw new PosError("That customer bill is no longer outstanding.");
@@ -219,33 +296,111 @@ export async function settleCustomerCredit(
         paymentMethod: input.paymentMethod,
         subtotalLaari: creditBill.subtotalLaari,
         totalLaari: creditBill.totalLaari,
-        items: { create: items },
+        items: {
+          create: items.map(saleItemCreateData),
+        },
       },
       select: { id: true, receiptNumber: true, createdAt: true },
     });
-    await tx.bill.create({
-      data: {
-        saleId: sale.id,
-        receiptNumber: sale.receiptNumber,
-        registerId: creditBill.registerId,
-        registerName: creditBill.register.name,
-        registerCode: creditBill.register.code,
-        cashierName: input.cashierName,
-        paymentMethod: input.paymentMethod,
-        subtotalLaari: creditBill.subtotalLaari,
-        totalLaari: creditBill.totalLaari,
-        items: items.map((item, index) => ({
-          id: `${sale.id}:${index + 1}`,
-          productName: item.productName,
-          productSku: item.productSku,
-          itemCategory: item.itemCategory,
-          quantity: item.quantity,
-          unitPriceLaari: item.unitPriceLaari,
-          lineTotalLaari: item.lineTotalLaari,
-        })),
-        soldAt: sale.createdAt,
-      },
+    await tx.saleItemStockComponent.createMany({
+      data: items.flatMap((item) => item.stockComponents.map((component) => ({
+        saleItemId: item.id,
+        productId: component.productId,
+        measuredPerItem: measured(component.measuredPerItem),
+      }))),
+      skipDuplicates: true,
     });
+    await tx.inventoryConsumption.updateMany({
+      where: { customerCreditBillId: creditBill.id, saleId: null },
+      data: { saleId: sale.id },
+    });
+    for (const item of items) {
+      await tx.inventoryConsumption.updateMany({
+        where: { customerCreditBillId: creditBill.id, sourceLineId: item.id, saleItemId: null },
+        data: { saleItemId: item.id },
+      });
+    }
+    const paidSnapshot: BillSnapshot = {
+      items: items.map((item) => ({
+        productId: item.productId ?? null,
+        menuItemId: item.menuItemId ?? null,
+        productName: item.productName,
+        productSku: item.productSku,
+        itemCategory: item.itemCategory,
+        quantity: item.quantity,
+        unitPriceLaari: item.unitPriceLaari,
+        lineTotalLaari: item.lineTotalLaari,
+      })),
+      subtotalLaari: creditBill.subtotalLaari,
+      totalLaari: creditBill.totalLaari,
+      paymentMethod: input.paymentMethod,
+      customerNote: creditBill.bill?.customerNote ?? null,
+      restaurantTableId: creditBill.bill?.restaurantTableId ?? null,
+      restaurantTableName: creditBill.bill?.restaurantTableName ?? null,
+    };
+    if (creditBill.bill) {
+      const version = creditBill.bill.version + 1;
+      await tx.bill.update({
+        where: { id: creditBill.bill.id },
+        data: {
+          saleId: sale.id,
+          registerShiftId: shift.id,
+          receiptNumber: sale.receiptNumber,
+          status: "PAID",
+          cashierName: input.cashierName,
+          paidById: input.settledById,
+          paidByName: input.cashierName,
+          paymentMethod: input.paymentMethod,
+          subtotalLaari: creditBill.subtotalLaari,
+          totalLaari: creditBill.totalLaari,
+          items: snapshotItems(items),
+          paidAt: sale.createdAt,
+          soldAt: sale.createdAt,
+          version,
+          revisions: { create: {
+            revision: version,
+            kind: "PAYMENT",
+            actorId: input.settledById,
+            actorName: input.cashierName,
+            changes: eventChanges("PAYMENT", paidSnapshot),
+            snapshot: snapshotJson(paidSnapshot),
+          } },
+        },
+      });
+    } else {
+      await tx.bill.create({
+        data: {
+          saleId: sale.id,
+          customerCreditBillId: creditBill.id,
+          registerShiftId: shift.id,
+          receiptNumber: sale.receiptNumber,
+          status: "PAID",
+          registerId: creditBill.registerId,
+          registerName: creditBill.register.name,
+          registerCode: creditBill.register.code,
+          cashierName: input.cashierName,
+          openedById: input.settledById,
+          openedByName: input.cashierName,
+          paidById: input.settledById,
+          paidByName: input.cashierName,
+          paymentMethod: input.paymentMethod,
+          subtotalLaari: creditBill.subtotalLaari,
+          totalLaari: creditBill.totalLaari,
+          items: snapshotItems(items),
+          openedAt: sale.createdAt,
+          paidAt: sale.createdAt,
+          soldAt: sale.createdAt,
+          revisions: { create: {
+            revision: 1,
+            kind: "PAYMENT",
+            actorId: input.settledById,
+            actorName: input.cashierName,
+            changes: eventChanges("PAYMENT", paidSnapshot),
+            snapshot: snapshotJson(paidSnapshot),
+          } },
+        },
+      });
+    }
     const paidAt = new Date();
     const updated = await tx.customerCreditBill.updateMany({
       where: { id: creditBill.id, status: "OUTSTANDING" },

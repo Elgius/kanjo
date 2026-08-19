@@ -8,6 +8,9 @@ databaseDescribe("Neon sale transaction", () => {
   let holdRegisterOrder: typeof import("@/lib/pos/orders").holdRegisterOrder;
   let issueCustomerCredit: typeof import("@/lib/pos/customers").issueCustomerCredit;
   let settleCustomerCredit: typeof import("@/lib/pos/customers").settleCustomerCredit;
+  let trackPrintedBill: typeof import("@/lib/pos/bill-lifecycle").trackPrintedBill;
+  let amendPrintedBill: typeof import("@/lib/pos/bill-lifecycle").amendPrintedBill;
+  let reversePaidBill: typeof import("@/lib/pos/bill-corrections").reversePaidBill;
   let userId: string;
   let roleId: string;
   let registerId: string;
@@ -23,6 +26,8 @@ databaseDescribe("Neon sale transaction", () => {
     ({ recordSale } = await import("@/lib/pos/sales"));
     ({ holdRegisterOrder } = await import("@/lib/pos/orders"));
     ({ issueCustomerCredit, settleCustomerCredit } = await import("@/lib/pos/customers"));
+    ({ trackPrintedBill, amendPrintedBill } = await import("@/lib/pos/bill-lifecycle"));
+    ({ reversePaidBill } = await import("@/lib/pos/bill-corrections"));
 
     const role = await db.role.create({
       data: { name: marker, normalizedName: marker },
@@ -68,6 +73,7 @@ databaseDescribe("Neon sale transaction", () => {
   afterAll(async () => {
     if (!db) return;
     await db.auditLog.deleteMany({ where: { actorId: userId } });
+    await db.inventoryConsumption.deleteMany({ where: { OR: [{ sale: { createdById: userId } }, { customerCreditBill: { customerId } }] } });
     await db.inventoryMovement.deleteMany({ where: { createdById: userId } });
     await db.bill.deleteMany({ where: { sale: { createdById: userId } } });
     await db.customerCreditBill.deleteMany({ where: { customerId } });
@@ -166,6 +172,59 @@ databaseDescribe("Neon sale transaction", () => {
     expect(completed.saleId).toBe(sale.id);
   });
 
+  test("tracks a printed unpaid bill, amendments, and payment on one canonical bill", async () => {
+    await db.inventoryBatch.create({ data: {
+      productId, registerId, receivedById: userId,
+      receivedQuantity: 10, remainingQuantity: 10,
+    } });
+    const tracked = await trackPrintedBill(db, {
+      shiftId,
+      actorId: userId,
+      actorName: "Integration Test",
+      paymentMethod: "CASH",
+      items: [{ itemId: productId, quantity: 1 }],
+      audit: { actorLabel: marker },
+    });
+    expect(tracked.version).toBe(1);
+    const amended = await amendPrintedBill(db, {
+      shiftId,
+      actorId: userId,
+      actorName: "Integration Test",
+      billId: tracked.id,
+      heldOrderId: tracked.orderId,
+      expectedVersion: tracked.version,
+      paymentMethod: "CARD",
+      items: [{ itemId: productId, quantity: 2 }],
+      audit: { actorLabel: marker },
+    });
+    expect(amended.version).toBe(2);
+    await expect(amendPrintedBill(db, {
+      shiftId,
+      actorId: userId,
+      actorName: "Integration Test",
+      billId: tracked.id,
+      heldOrderId: tracked.orderId,
+      expectedVersion: 1,
+      paymentMethod: "CARD",
+      items: [{ itemId: productId, quantity: 2 }],
+      audit: { actorLabel: marker },
+    })).rejects.toThrow("changed elsewhere");
+
+    const sale = await recordSale(db, {
+      shiftId,
+      createdById: userId,
+      cashierName: "Integration Test",
+      heldOrderId: tracked.orderId,
+      paymentMethod: "CARD",
+      items: [{ itemId: productId, quantity: 2 }],
+      audit: { actorLabel: marker },
+    });
+    const paid = await db.bill.findUniqueOrThrow({ where: { id: tracked.id }, include: { revisions: { orderBy: { revision: "asc" } } } });
+    expect(paid.status).toBe("PAID");
+    expect(paid.saleId).toBe(sale.id);
+    expect(JSON.stringify(paid.revisions.map((revision) => revision.kind))).toBe(JSON.stringify(["INITIAL_PRINT", "AMENDMENT", "PAYMENT"]));
+  });
+
   test("deducts stock on customer credit and records the sale only when paid", async () => {
     const beforeStock = Number((await db.inventoryBatch.aggregate({
       where: { productId },
@@ -225,5 +284,21 @@ databaseDescribe("Neon sale transaction", () => {
     expect(paid.status).toBe("PAID");
     expect(paid.saleId).toBe(sale.id);
     expect(Number((await db.inventoryBatch.aggregate({ where: { productId }, _sum: { remainingQuantity: true } }))._sum.remainingQuantity)).toBe(beforeStock - 1);
+
+    const settledBill = await db.bill.findUniqueOrThrow({ where: { saleId: sale.id } });
+    await reversePaidBill(db, {
+      billId: settledBill.id,
+      registerId,
+      sessionId: shiftId,
+      expectedVersion: settledBill.version,
+      stock: { mode: "ALL", quantities: [] },
+      actorId: userId,
+      actorName: "Integration Test",
+      audit: { actorLabel: marker },
+    });
+    const reversedCredit = await db.customerCreditBill.findUniqueOrThrow({ where: { id: creditBill.id } });
+    expect(reversedCredit.status).toBe("REVERSED");
+    expect((await db.sale.findUniqueOrThrow({ where: { id: sale.id } })).status).toBe("REFUNDED");
+    expect(Number((await db.inventoryBatch.aggregate({ where: { productId }, _sum: { remainingQuantity: true } }))._sum.remainingQuantity)).toBe(beforeStock);
   });
 });

@@ -261,18 +261,18 @@
     visibility: hidden !important;
   }
 
-  .receipt-print-root,
-  .receipt-print-root *,
-  .bill-history-print-root,
-  .bill-history-print-root *,
-  .current-order-print-root,
-  .current-order-print-root * {
+  body[data-print-target="receipt"] .receipt-print-root,
+  body[data-print-target="receipt"] .receipt-print-root *,
+  body[data-print-target="history"] .bill-history-print-root,
+  body[data-print-target="history"] .bill-history-print-root *,
+  body[data-print-target="current"] .current-order-print-root,
+  body[data-print-target="current"] .current-order-print-root * {
     visibility: visible !important;
   }
 
-  .receipt-print-root,
-  .bill-history-print-root,
-  .current-order-print-root {
+  body[data-print-target="receipt"] .receipt-print-root,
+  body[data-print-target="history"] .bill-history-print-root,
+  body[data-print-target="current"] .current-order-print-root {
     position: fixed;
     top: 0;
     left: 0;
