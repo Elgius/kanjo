@@ -21,6 +21,11 @@ import {
   validateRoleName,
   validateUsername,
 } from "@/lib/permissions";
+import {
+  canManageTeamAccount,
+  teamAccountDeniedMessage,
+  type TeamAccountOperation,
+} from "@/lib/team-account-policy";
 
 function settingsRedirect(
   path: "/settings" | "/settings/roles",
@@ -321,6 +326,234 @@ export async function createAccountAction(formData: FormData) {
   settingsRedirect("/settings", "success", "Account created.");
 }
 
+async function requireManageableTeamAccount(
+  tx: Prisma.TransactionClient,
+  authorization: AuthorizationContext,
+  userId: string,
+  operation: TeamAccountOperation,
+) {
+  const target = await tx.user.findUnique({
+    where: { id: userId },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      username: true,
+      isSiteAdmin: true,
+      _count: { select: { accounts: true } },
+    },
+  });
+  if (!target || target._count.accounts === 0) throw new Error("ACCOUNT_NOT_FOUND");
+  if (!canManageTeamAccount({
+    actorId: authorization.user.id,
+    targetId: target.id,
+    targetIsSiteAdmin: target.isSiteAdmin,
+    operation,
+  })) {
+    throw new Error("ACCOUNT_PROTECTED");
+  }
+  return target;
+}
+
+function accountManagementError(
+  error: unknown,
+  authorization: AuthorizationContext,
+  userId: string,
+  fallback: string,
+) {
+  if (error instanceof Error && error.message === "ACCOUNT_NOT_FOUND") {
+    return "Account not found.";
+  }
+  if (error instanceof Error && error.message === "ACCOUNT_PROTECTED") {
+    return teamAccountDeniedMessage({ actorId: authorization.user.id, targetId: userId });
+  }
+  return fallback;
+}
+
+export async function updateUsernameAction(userId: string, formData: FormData) {
+  const authorization = await requireSiteAdminAction("ACCOUNT_USERNAME_UPDATE");
+  const parsedUsername = validateUsername(String(formData.get("username") ?? ""));
+  if (!parsedUsername.ok) {
+    await auditFailure(authorization, "ACCOUNT_USERNAME_UPDATE", parsedUsername.error, { userId });
+    settingsRedirect("/settings", "error", parsedUsername.error);
+  }
+  const request = await getAuditRequestContext();
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      const target = await requireManageableTeamAccount(
+        tx,
+        authorization,
+        userId,
+        "EDIT_USERNAME",
+      );
+      const previousUsername = target.username;
+      const hasManagedEmail = previousUsername !== null
+        && target.email === `${previousUsername}@accounts.kanjo.invalid`;
+      const result = await tx.user.updateMany({
+        where: {
+          id: userId,
+          OR: [
+            { isSiteAdmin: false },
+            { id: authorization.user.id },
+          ],
+        },
+        data: {
+          username: parsedUsername.value,
+          displayUsername: parsedUsername.value,
+          name: target.name === previousUsername ? parsedUsername.value : target.name,
+          email: hasManagedEmail
+            ? `${parsedUsername.value}@accounts.kanjo.invalid`
+            : target.email,
+        },
+      });
+      if (result.count !== 1) throw new Error("ACCOUNT_PROTECTED");
+      await writeAudit(tx, {
+        outcome: "SUCCESS",
+        event: "ACCOUNT_USERNAME_UPDATE",
+        page: "SETTINGS",
+        actorId: authorization.user.id,
+        actorLabel: actorLabel(authorization),
+        targetType: "user",
+        targetId: userId,
+        summary: `${previousUsername ?? target.email} renamed to ${parsedUsername.value}.`,
+        metadata: { previousUsername, username: parsedUsername.value },
+        request,
+      });
+    });
+  } catch (error) {
+    const message =
+      error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002"
+        ? "That username already exists."
+        : accountManagementError(error, authorization, userId, "The username could not be updated.");
+    await auditFailure(authorization, "ACCOUNT_USERNAME_UPDATE", message, { userId });
+    settingsRedirect("/settings", "error", message);
+  }
+
+  revalidatePath("/settings", "layout");
+  settingsRedirect("/settings", "success", "Username updated.");
+}
+
+export async function resetAccountPasswordAction(userId: string, formData: FormData) {
+  const authorization = await requireSiteAdminAction("ACCOUNT_PASSWORD_RESET");
+  const password = String(formData.get("password") ?? "");
+  const confirmation = String(formData.get("passwordConfirmation") ?? "");
+  if (password.length < 8 || password.length > 128) {
+    const message = "Password must be between 8 and 128 characters.";
+    await auditFailure(authorization, "ACCOUNT_PASSWORD_RESET", message, { userId });
+    settingsRedirect("/settings", "error", message);
+  }
+  if (password !== confirmation) {
+    const message = "The password confirmation does not match.";
+    await auditFailure(authorization, "ACCOUNT_PASSWORD_RESET", message, { userId });
+    settingsRedirect("/settings", "error", message);
+  }
+  const passwordHash = await hashPassword(password);
+  const request = await getAuditRequestContext();
+
+  try {
+    await prisma.$transaction(
+      async (tx) => {
+        const target = await requireManageableTeamAccount(
+          tx,
+          authorization,
+          userId,
+          "RESET_PASSWORD",
+        );
+        const credential = await tx.account.updateMany({
+          where: { userId, providerId: "credential" },
+          data: { password: passwordHash },
+        });
+        if (credential.count === 0) {
+          await tx.account.create({
+            data: {
+              id: crypto.randomUUID(),
+              accountId: userId,
+              providerId: "credential",
+              userId,
+              password: passwordHash,
+            },
+          });
+        }
+        await tx.session.deleteMany({ where: { userId } });
+        await writeAudit(tx, {
+          outcome: "SUCCESS",
+          event: "ACCOUNT_PASSWORD_RESET",
+          page: "SETTINGS",
+          actorId: authorization.user.id,
+          actorLabel: actorLabel(authorization),
+          targetType: "user",
+          targetId: userId,
+          summary: `Password reset for ${target.username ?? target.email}.`,
+          metadata: { sessionsRevoked: true },
+          request,
+        });
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+  } catch (error) {
+    const message = accountManagementError(
+      error,
+      authorization,
+      userId,
+      "The password could not be reset.",
+    );
+    await auditFailure(authorization, "ACCOUNT_PASSWORD_RESET", message, { userId });
+    settingsRedirect("/settings", "error", message);
+  }
+
+  revalidatePath("/settings", "layout");
+  settingsRedirect("/settings", "success", "Password reset and active sessions revoked.");
+}
+
+export async function deleteAccountAction(userId: string) {
+  const authorization = await requireSiteAdminAction("ACCOUNT_DELETE");
+  const request = await getAuditRequestContext();
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      const target = await requireManageableTeamAccount(tx, authorization, userId, "DELETE");
+      const result = await tx.user.updateMany({
+        where: { id: userId, isSiteAdmin: false },
+        data: {
+          username: null,
+          displayUsername: null,
+          email: `${userId}@deleted.kanjo.invalid`,
+          emailVerified: false,
+          image: null,
+        },
+      });
+      if (result.count !== 1) throw new Error("ACCOUNT_PROTECTED");
+      await tx.session.deleteMany({ where: { userId } });
+      await tx.account.deleteMany({ where: { userId } });
+      await writeAudit(tx, {
+        outcome: "SUCCESS",
+        event: "ACCOUNT_DELETE",
+        page: "SETTINGS",
+        actorId: authorization.user.id,
+        actorLabel: actorLabel(authorization),
+        targetType: "user",
+        targetId: userId,
+        summary: `Account ${target.username ?? target.email} deleted.`,
+        metadata: { historicalUserReferenceRetained: true },
+        request,
+      });
+    });
+  } catch (error) {
+    const message = accountManagementError(
+      error,
+      authorization,
+      userId,
+      "The account could not be deleted.",
+    );
+    await auditFailure(authorization, "ACCOUNT_DELETE", message, { userId });
+    settingsRedirect("/settings", "error", message);
+  }
+
+  revalidatePath("/settings", "layout");
+  settingsRedirect("/settings", "success", "Account deleted.");
+}
+
 export async function assignRoleAction(userId: string, formData: FormData) {
   const authorization = await requireSiteAdminAction("ACCOUNT_ROLE_ASSIGN");
   const roleId = String(formData.get("roleId") ?? "");
@@ -329,7 +562,7 @@ export async function assignRoleAction(userId: string, formData: FormData) {
     await prisma.$transaction(async (tx) => {
       const [target, role] = await Promise.all([
         tx.user.findUniqueOrThrow({
-          where: { id: userId },
+          where: { id: userId, accounts: { some: {} } },
           select: { username: true, email: true, role: { select: { id: true, name: true } } },
         }),
         tx.role.findUniqueOrThrow({ where: { id: roleId }, select: { id: true, name: true } }),
@@ -370,7 +603,7 @@ export async function setSiteAdminAction(userId: string, formData: FormData) {
     await prisma.$transaction(
       async (tx) => {
         const target = await tx.user.findUniqueOrThrow({
-          where: { id: userId },
+          where: { id: userId, accounts: { some: {} } },
           select: { username: true, email: true, isSiteAdmin: true },
         });
         if (!promote && target.isSiteAdmin) {
