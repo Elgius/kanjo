@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Eye, LoaderCircle, Printer, X } from "lucide-react";
 
-import { PrintableBill, PrintableBillPortal, type PrintableBillProps } from "@/components/pos/printable-bill";
+import { printBill, PrintableBill, PrintableBillPortal, type PrintableBillProps } from "@/components/pos/printable-bill";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatMvr } from "@/lib/pos/money";
 import type { BillCursor, BillHistoryFilters, BillHistoryRow } from "@/lib/pos/bills";
@@ -34,11 +34,6 @@ function revisionLabel(kind: BillHistoryRow["revisions"][number]["kind"]) {
 function BillDialog({ bill, onClose }: { bill: BillHistoryRow; onClose: () => void }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   useEffect(() => { dialogRef.current?.showModal(); }, []);
-  function print() {
-    document.body.setAttribute("data-print-target", "history");
-    window.addEventListener("afterprint", () => document.body.removeAttribute("data-print-target"), { once: true });
-    window.print();
-  }
   const printableBillProps = {
     registerName: bill.registerName,
     registerCode: bill.registerCode,
@@ -91,7 +86,7 @@ function BillDialog({ bill, onClose }: { bill: BillHistoryRow; onClose: () => vo
           </section>
         </div>
 
-        <div className="flex justify-end gap-2.5"><button type="button" onClick={() => dialogRef.current?.close()} className="h-10 rounded-lg border border-border px-4 text-xs font-semibold">Close</button><button type="button" onClick={print} className="flex h-10 items-center gap-2 rounded-lg bg-primary px-4 text-xs font-semibold text-primary-foreground"><Printer className="size-3.5" />Print bill</button></div>
+        <div className="flex justify-end gap-2.5"><button type="button" onClick={() => dialogRef.current?.close()} className="h-10 rounded-lg border border-border px-4 text-xs font-semibold">Close</button><button type="button" onClick={() => printBill("history")} className="flex h-10 items-center gap-2 rounded-lg bg-primary px-4 text-xs font-semibold text-primary-foreground"><Printer className="size-3.5" />Print bill</button></div>
         <PrintableBillPortal {...printableBillProps} className="bill-history-print-root pointer-events-none fixed -left-[10000px] top-0" />
       </div>
     </dialog>

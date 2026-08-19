@@ -42,6 +42,20 @@ export type PrintableBillProps = {
   showIncludedTax?: boolean;
 };
 
+export type BillPrintTarget = "receipt" | "history" | "current";
+
+const BILL_PRINT_CLASS: Record<BillPrintTarget, string> = {
+  receipt: "receipt-print-root",
+  history: "bill-history-print-root",
+  current: "current-order-print-root",
+};
+const BILL_PAGE_STYLE_ID = "bill-print-page-size";
+const CSS_PIXELS_PER_INCH = 96;
+const MILLIMETRES_PER_INCH = 25.4;
+const PAGE_WIDTH_MM = 58;
+const PAGE_MARGIN_MM = 3;
+const PAGE_HEIGHT_BUFFER_MM = 1;
+
 const subscribeToDocument = () => () => {};
 const getDocumentBody = () => document.body;
 const getServerDocumentBody = () => null;
@@ -105,4 +119,37 @@ export function PrintableBillPortal(props: PrintableBillProps) {
   const portalRoot = useSyncExternalStore(subscribeToDocument, getDocumentBody, getServerDocumentBody);
 
   return portalRoot ? createPortal(<PrintableBill {...props} />, portalRoot) : null;
+}
+
+export function printBill(target: BillPrintTarget) {
+  const bill = document.querySelector<HTMLElement>(`body > .${BILL_PRINT_CLASS[target]}`);
+  if (!bill) return;
+
+  document.getElementById(BILL_PAGE_STYLE_ID)?.remove();
+
+  const contentHeightMm = bill.getBoundingClientRect().height
+    * MILLIMETRES_PER_INCH
+    / CSS_PIXELS_PER_INCH;
+  const pageHeightMm = Math.ceil(
+    (contentHeightMm + PAGE_MARGIN_MM * 2 + PAGE_HEIGHT_BUFFER_MM) * 10,
+  ) / 10;
+  const pageStyle = document.createElement("style");
+  pageStyle.id = BILL_PAGE_STYLE_ID;
+  pageStyle.textContent = `@media print { @page { size: ${PAGE_WIDTH_MM}mm ${pageHeightMm}mm; margin: ${PAGE_MARGIN_MM}mm 5mm; } }`;
+  document.head.append(pageStyle);
+  document.body.setAttribute("data-print-target", target);
+
+  function cleanup() {
+    document.body.removeAttribute("data-print-target");
+    pageStyle.remove();
+  }
+
+  window.addEventListener("afterprint", cleanup, { once: true });
+  try {
+    window.print();
+  } catch (error) {
+    window.removeEventListener("afterprint", cleanup);
+    cleanup();
+    throw error;
+  }
 }

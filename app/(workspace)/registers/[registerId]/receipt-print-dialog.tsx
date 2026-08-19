@@ -3,7 +3,7 @@
 import { useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 
-import { PrintableBill, PrintableBillPortal, type PrintableBillProps } from "@/components/pos/printable-bill";
+import { printBill, PrintableBill, PrintableBillPortal, type PrintableBillProps } from "@/components/pos/printable-bill";
 import type { BillStatus } from "@/generated/prisma/enums";
 
 export type PrintableReceipt = {
@@ -48,12 +48,6 @@ export function ReceiptPrintDialog({
     router.replace(`/registers/${registerId}`, { scroll: false });
   }
 
-  function print() {
-    document.body.setAttribute("data-print-target", "receipt");
-    window.addEventListener("afterprint", () => document.body.removeAttribute("data-print-target"), { once: true });
-    window.print();
-  }
-
   const createdAt = new Intl.DateTimeFormat("en-GB", {
     timeZone: "Indian/Maldives",
     dateStyle: "medium",
@@ -89,7 +83,7 @@ export function ReceiptPrintDialog({
 
         <div className="flex justify-end gap-2.5">
           <button type="button" onClick={close} className="h-10 rounded-lg border border-border px-4 text-xs font-semibold">No, thanks</button>
-          <button type="button" onClick={print} className="h-10 rounded-lg bg-primary px-4 text-xs font-semibold text-primary-foreground">Yes, print bill</button>
+          <button type="button" onClick={() => printBill("receipt")} className="h-10 rounded-lg bg-primary px-4 text-xs font-semibold text-primary-foreground">Yes, print bill</button>
         </div>
         <PrintableBillPortal {...printableBillProps} className="receipt-print-root pointer-events-none fixed -left-[10000px] top-0" />
       </div>

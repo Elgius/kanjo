@@ -7,7 +7,7 @@ import { useRouter } from "next/navigation";
 import { flushSync } from "react-dom";
 import { useFormStatus } from "react-dom";
 
-import { PrintableBillPortal } from "@/components/pos/printable-bill";
+import { printBill, PrintableBillPortal } from "@/components/pos/printable-bill";
 import type { BillStatus } from "@/generated/prisma/enums";
 import { formatMvr } from "@/lib/pos/money";
 import { cn } from "@/lib/utils";
@@ -317,9 +317,7 @@ export function RegisterSaleWorkspace({
       setTrackedBill(next);
       setHeldOrderId(result.bill.orderId);
     });
-    document.body.setAttribute("data-print-target", "current");
-    window.addEventListener("afterprint", () => document.body.removeAttribute("data-print-target"), { once: true });
-    window.print();
+    printBill("current");
   }
 
   const checkoutAction = checkoutRegisterSaleAction.bind(null, shiftId, registerId);

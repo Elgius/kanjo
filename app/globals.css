@@ -252,11 +252,6 @@
 }
 
 @media print {
-  @page {
-    size: 58mm auto;
-    margin: 3mm 5mm;
-  }
-
   body * {
     visibility: hidden !important;
   }
