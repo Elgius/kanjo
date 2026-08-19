@@ -1,6 +1,14 @@
 import { Prisma, type PrismaClient } from "@/generated/prisma/client";
-import type { PaymentMethod } from "@/generated/prisma/enums";
+import type { BillStatus, PaymentMethod } from "@/generated/prisma/enums";
 import { auditCreateData, type AuditRequestContext } from "@/lib/audit-core";
+import {
+  describeBillChanges,
+  eventChanges,
+  itemsJson,
+  makeBillSnapshot,
+  parseBillSnapshot,
+  snapshotJson,
+} from "@/lib/pos/bill-revisions";
 import {
   maldivesDate,
   measured,
@@ -16,6 +24,8 @@ export type RecordSaleInput = {
   createdById: string;
   cashierName?: string;
   heldOrderId?: string | null;
+  customerNote?: string | null;
+  restaurantTableId?: string | null;
   paymentMethod: PaymentMethod;
   items: ReadonlyArray<{ itemId: string; quantity: number }>;
   audit: { actorLabel: string; request?: AuditRequestContext };
@@ -47,7 +57,57 @@ export type SaleLine = {
   quantity: number;
   unitPriceLaari: number;
   lineTotalLaari: number;
+  stockComponents: Array<{
+    productId: string;
+    productName: string;
+    measuredPerItem: number;
+  }>;
 };
+
+export type PersistedSaleLine = SaleLine & { id: string };
+
+export function saleItemCreateData(line: PersistedSaleLine) {
+  return {
+    id: line.id,
+    productId: line.productId,
+    menuItemId: line.menuItemId,
+    productName: line.productName,
+    productSku: line.productSku,
+    itemCategory: line.itemCategory,
+    quantity: line.quantity,
+    unitPriceLaari: line.unitPriceLaari,
+    lineTotalLaari: line.lineTotalLaari,
+  };
+}
+
+export function allocateDeductionsToLines(
+  lines: readonly PersistedSaleLine[],
+  deductions: Map<string, Array<{ batchId: string; quantity: number }>>,
+) {
+  const remaining = new Map(
+    [...deductions].map(([productId, entries]) => [
+      productId,
+      entries.map((entry) => ({ ...entry })),
+    ]),
+  );
+  const allocations: Array<{ sourceLineId: string; productId: string; batchId: string; quantity: number }> = [];
+  for (const line of lines) {
+    for (const component of line.stockComponents) {
+      let needed = Number((component.measuredPerItem * line.quantity).toFixed(3));
+      const batches = remaining.get(component.productId) ?? [];
+      for (const batch of batches) {
+        if (needed <= 0.0004) break;
+        const take = Math.min(needed, batch.quantity);
+        if (take <= 0) continue;
+        allocations.push({ sourceLineId: line.id, productId: component.productId, batchId: batch.batchId, quantity: take });
+        batch.quantity = Number((batch.quantity - take).toFixed(3));
+        needed = Number((needed - take).toFixed(3));
+      }
+      if (needed > 0.0004) throw new PosError(`Stock allocation for ${line.productName} is incomplete.`);
+    }
+  }
+  return allocations;
+}
 
 export async function deductRequirements(
   tx: Prisma.TransactionClient,
@@ -124,6 +184,11 @@ export async function prepareSaleInventory(
         quantity: item.quantity,
         unitPriceLaari: product.retailPriceLaari,
         lineTotalLaari: product.retailPriceLaari * item.quantity,
+        stockComponents: [{
+          productId: product.id,
+          productName: product.name,
+          measuredPerItem: measuredPerStockUnit(product),
+        }],
       };
     });
     requirements = lines.map((line) => {
@@ -166,6 +231,11 @@ export async function prepareSaleInventory(
           quantity: item.quantity,
           unitPriceLaari: product.retailPriceLaari,
           lineTotalLaari: product.retailPriceLaari * item.quantity,
+          stockComponents: [{
+            productId: product.id,
+            productName: product.name,
+            measuredPerItem: measuredPerServing(product),
+          }],
         };
       }
       return {
@@ -176,6 +246,11 @@ export async function prepareSaleInventory(
         quantity: item.quantity,
         unitPriceLaari: menuItem.retailPriceLaari,
         lineTotalLaari: menuItem.retailPriceLaari * item.quantity,
+        stockComponents: menuItem.ingredients.map((ingredient) => ({
+          productId: ingredient.productId,
+          productName: ingredient.product.name,
+          measuredPerItem: measuredPerServing(ingredient.product) * ingredient.servingMultiplier,
+        })),
       };
     });
     const requirementMap = new Map<string, InventoryRequirement>();
@@ -223,14 +298,41 @@ export async function recordSale(db: PrismaClient, input: RecordSaleInput) {
     });
     if (!shift) throw new PosError("The selected register does not have an open shift.");
 
+    let heldOrder: {
+      id: string;
+      customerNote: string | null;
+      restaurantTableId: string | null;
+      restaurantTable: { id: string; name: string } | null;
+      bill: {
+        id: string;
+        version: number;
+        status: BillStatus;
+        items: Prisma.JsonValue;
+        subtotalLaari: number;
+        totalLaari: number;
+        paymentMethod: PaymentMethod;
+        customerNote: string | null;
+        restaurantTableId: string | null;
+        restaurantTableName: string | null;
+      } | null;
+    } | null = null;
     if (input.heldOrderId) {
-      const heldOrder = await tx.registerOrder.findFirst({
+      heldOrder = await tx.registerOrder.findFirst({
         where: {
           id: input.heldOrderId,
           registerShiftId: shift.id,
           status: "HELD",
         },
-        select: { id: true },
+        select: {
+          id: true,
+          customerNote: true,
+          restaurantTableId: true,
+          restaurantTable: { select: { id: true, name: true } },
+          bill: { select: {
+            id: true, version: true, status: true, items: true, subtotalLaari: true, totalLaari: true,
+            paymentMethod: true, customerNote: true, restaurantTableId: true, restaurantTableName: true,
+          } },
+        },
       });
       if (!heldOrder) throw new PosError("That held order is no longer available.");
     }
@@ -238,6 +340,8 @@ export async function recordSale(db: PrismaClient, input: RecordSaleInput) {
     const { lines, requirements } = await prepareSaleInventory(tx, shift, input.items);
 
     const deductions = await deductRequirements(tx, requirements, shift.register.purpose === "SHOP");
+    const persistedLines: PersistedSaleLine[] = lines.map((line) => ({ ...line, id: crypto.randomUUID() }));
+    const allocations = allocateDeductionsToLines(persistedLines, deductions);
     const totalLaari = lines.reduce((total, line) => total + line.lineTotalLaari, 0);
     const sale = await tx.sale.create({
       data: {
@@ -246,34 +350,127 @@ export async function recordSale(db: PrismaClient, input: RecordSaleInput) {
         paymentMethod: input.paymentMethod,
         subtotalLaari: totalLaari,
         totalLaari,
-        items: { create: lines },
+        items: {
+          create: persistedLines.map(saleItemCreateData),
+        },
       },
       select: { id: true, receiptNumber: true, totalLaari: true, createdAt: true },
     });
-
-    await tx.bill.create({
-      data: {
-        saleId: sale.id,
-        receiptNumber: sale.receiptNumber,
-        registerId: shift.registerId,
-        registerName: shift.register.name,
-        registerCode: shift.register.code,
-        cashierName: input.cashierName ?? input.audit.actorLabel,
-        paymentMethod: input.paymentMethod,
-        subtotalLaari: totalLaari,
-        totalLaari,
-        items: lines.map((line, index) => ({
-          id: `${sale.id}:${index + 1}`,
-          productName: line.productName,
-          productSku: line.productSku,
-          itemCategory: line.itemCategory,
-          quantity: line.quantity,
-          unitPriceLaari: line.unitPriceLaari,
-          lineTotalLaari: line.lineTotalLaari,
-        })),
-        soldAt: sale.createdAt,
-      },
+    await tx.saleItemStockComponent.createMany({
+      data: persistedLines.flatMap((line) => line.stockComponents.map((component) => ({
+        saleItemId: line.id,
+        productId: component.productId,
+        measuredPerItem: measured(component.measuredPerItem),
+      }))),
     });
+
+    const payerName = input.cashierName ?? input.audit.actorLabel;
+    const finalTable = input.restaurantTableId
+      ? await tx.restaurantTable.findFirst({
+          where: { id: input.restaurantTableId, registerId: shift.registerId, active: true },
+          select: { id: true, name: true },
+        })
+      : heldOrder?.restaurantTable ?? null;
+    const finalSnapshot = makeBillSnapshot(
+      persistedLines,
+      input.paymentMethod,
+      input.customerNote ?? heldOrder?.customerNote ?? null,
+      finalTable,
+    );
+    let billNumber: bigint;
+    if (heldOrder?.bill) {
+      if (heldOrder.bill.status !== "UNPAID") throw new PosError("That bill is no longer unpaid.");
+      const before = parseBillSnapshot({
+        items: heldOrder.bill.items,
+        subtotalLaari: heldOrder.bill.subtotalLaari,
+        totalLaari: heldOrder.bill.totalLaari,
+        paymentMethod: heldOrder.bill.paymentMethod,
+        customerNote: heldOrder.bill.customerNote,
+        restaurantTableId: heldOrder.bill.restaurantTableId,
+        restaurantTableName: heldOrder.bill.restaurantTableName,
+      } as unknown as Prisma.JsonValue);
+      if (!before) throw new PosError("That bill has invalid snapshot data.");
+      const changes = describeBillChanges(before, finalSnapshot);
+      let version = heldOrder.bill.version;
+      if (changes.length) {
+        version += 1;
+        await tx.billRevision.create({ data: {
+          billId: heldOrder.bill.id, revision: version, kind: "AMENDMENT",
+          actorId: input.createdById, actorName: payerName, changes,
+          snapshot: snapshotJson(finalSnapshot),
+        } });
+      }
+      version += 1;
+      const updatedBill = await tx.bill.update({
+        where: { id: heldOrder.bill.id },
+        data: {
+          saleId: sale.id,
+          receiptNumber: sale.receiptNumber,
+          status: "PAID",
+          cashierName: payerName,
+          paidById: input.createdById,
+          paidByName: payerName,
+          paymentMethod: input.paymentMethod,
+          subtotalLaari: finalSnapshot.subtotalLaari,
+          totalLaari: finalSnapshot.totalLaari,
+          items: itemsJson(finalSnapshot),
+          customerNote: finalSnapshot.customerNote,
+          restaurantTableId: finalSnapshot.restaurantTableId,
+          restaurantTableName: finalSnapshot.restaurantTableName,
+          paidAt: sale.createdAt,
+          soldAt: sale.createdAt,
+          version,
+          revisions: { create: {
+            revision: version,
+            kind: "PAYMENT",
+            actorId: input.createdById,
+            actorName: payerName,
+            changes: eventChanges("PAYMENT", finalSnapshot),
+            snapshot: snapshotJson(finalSnapshot),
+          } },
+        },
+        select: { billNumber: true },
+      });
+      billNumber = updatedBill.billNumber;
+    } else {
+      const createdBill = await tx.bill.create({
+        data: {
+          saleId: sale.id,
+          orderId: heldOrder?.id ?? null,
+          registerShiftId: shift.id,
+          receiptNumber: sale.receiptNumber,
+          status: "PAID",
+          registerId: shift.registerId,
+          registerName: shift.register.name,
+          registerCode: shift.register.code,
+          cashierName: payerName,
+          openedById: input.createdById,
+          openedByName: payerName,
+          paidById: input.createdById,
+          paidByName: payerName,
+          paymentMethod: input.paymentMethod,
+          subtotalLaari: finalSnapshot.subtotalLaari,
+          totalLaari: finalSnapshot.totalLaari,
+          items: itemsJson(finalSnapshot),
+          customerNote: finalSnapshot.customerNote,
+          restaurantTableId: finalSnapshot.restaurantTableId,
+          restaurantTableName: finalSnapshot.restaurantTableName,
+          openedAt: sale.createdAt,
+          paidAt: sale.createdAt,
+          soldAt: sale.createdAt,
+          revisions: { create: {
+            revision: 1,
+            kind: "PAYMENT",
+            actorId: input.createdById,
+            actorName: payerName,
+            changes: eventChanges("PAYMENT", finalSnapshot),
+            snapshot: snapshotJson(finalSnapshot),
+          } },
+        },
+        select: { billNumber: true },
+      });
+      billNumber = createdBill.billNumber;
+    }
 
     if (input.heldOrderId) {
       const completed = await tx.registerOrder.updateMany({
@@ -292,6 +489,7 @@ export async function recordSale(db: PrismaClient, input: RecordSaleInput) {
       if (completed.count !== 1) throw new PosError("That held order changed. Try again.");
     }
 
+    const movementIds = new Map<string, string>();
     for (const requirement of requirements) {
       const aggregate = await tx.inventoryBatch.aggregate({
         where: { productId: requirement.productId, remainingQuantity: { gt: 0 } },
@@ -300,7 +498,7 @@ export async function recordSale(db: PrismaClient, input: RecordSaleInput) {
       const batchSummary = (deductions.get(requirement.productId) ?? [])
         .map((entry) => `${entry.batchId}:${entry.quantity}`)
         .join(", ");
-      await tx.inventoryMovement.create({
+      const movement = await tx.inventoryMovement.create({
         data: {
           productId: requirement.productId,
           registerId: shift.registerId,
@@ -311,8 +509,21 @@ export async function recordSale(db: PrismaClient, input: RecordSaleInput) {
           balanceAfter: aggregate._sum.remainingQuantity ?? new Prisma.Decimal(0),
           reason: `Receipt #${sale.receiptNumber} · batches ${batchSummary}`,
         },
+        select: { id: true },
       });
+      movementIds.set(requirement.productId, movement.id);
     }
+    await tx.inventoryConsumption.createMany({
+      data: allocations.map((allocation) => ({
+        sourceLineId: allocation.sourceLineId,
+        saleId: sale.id,
+        saleItemId: allocation.sourceLineId,
+        inventoryMovementId: movementIds.get(allocation.productId)!,
+        productId: allocation.productId,
+        batchId: allocation.batchId,
+        consumedQuantity: measured(allocation.quantity),
+      })),
+    });
 
     await tx.auditLog.create({
       data: auditCreateData({
@@ -336,7 +547,7 @@ export async function recordSale(db: PrismaClient, input: RecordSaleInput) {
         request: input.audit.request,
       }),
     });
-    return sale;
+    return { ...sale, billNumber };
   }, { isolationLevel: "Serializable" });
 }
 

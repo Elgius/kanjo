@@ -847,6 +847,7 @@ export async function getRegisterManagementData(registerId: string, receiptId?: 
             restaurantTable: { select: { name: true } },
             totalLaari: true,
             heldAt: true,
+            bill: { select: { id: true, billNumber: true, version: true, status: true } },
             items: {
               orderBy: { id: "asc" },
               select: { productId: true, menuItemId: true, quantity: true },
@@ -869,6 +870,7 @@ export async function getRegisterManagementData(registerId: string, receiptId?: 
             paymentMethod: true,
             createdAt: true,
             createdBy: { select: { name: true } },
+            bill: { select: { billNumber: true, status: true } },
             items: {
               orderBy: { id: "asc" },
               select: {
@@ -911,6 +913,7 @@ export async function getRegisterManagementData(registerId: string, receiptId?: 
       ? {
           ...receipt,
           receiptNumber: receipt.receiptNumber.toString(),
+          bill: receipt.bill ? { ...receipt.bill, billNumber: receipt.bill.billNumber.toString() } : null,
           createdAt: receipt.createdAt.toISOString(),
         }
       : null,
@@ -923,6 +926,7 @@ export async function getRegisterManagementData(registerId: string, receiptId?: 
     creditCustomers,
     heldOrders: heldOrders.map((order) => ({
       ...order,
+      bill: order.bill ? { ...order.bill, billNumber: order.bill.billNumber.toString() } : null,
       items: order.items.flatMap((item) => {
         const itemId = item.productId ?? item.menuItemId;
         return itemId ? [{ itemId, quantity: item.quantity }] : [];

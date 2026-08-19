@@ -1,13 +1,17 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Minus, Plus, Printer, Search } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { flushSync } from "react-dom";
 import { useFormStatus } from "react-dom";
 
+import { PrintableBill } from "@/components/pos/printable-bill";
+import type { BillStatus } from "@/generated/prisma/enums";
 import { formatMvr } from "@/lib/pos/money";
 import { cn } from "@/lib/utils";
-import { cancelHeldOrderAction, checkoutRegisterSaleAction, creditRegisterBillAction, holdRegisterOrderAction } from "./actions";
+import { amendPrintedBillAction, cancelHeldOrderAction, checkoutRegisterSaleAction, creditRegisterBillAction, holdRegisterOrderAction, printUnpaidBillAction } from "./actions";
 
 type SellableItem = {
   id: string;
@@ -28,7 +32,10 @@ type HeldOrder = {
   totalLaari: number;
   heldAt: string;
   items: Array<{ itemId: string; quantity: number }>;
+  bill: { id: string; billNumber: string; version: number; status: BillStatus } | null;
 };
+
+type TrackedBill = { id: string; billNumber: string; version: number };
 
 type RestaurantTable = {
   id: string;
@@ -139,6 +146,7 @@ export function RegisterSaleWorkspace({
   permissions: { sale: boolean; hold: boolean; cancel: boolean; credit: boolean };
   initialHeldOrderId?: string;
 }) {
+  const router = useRouter();
   const canOperate = permissions.sale || permissions.hold || permissions.credit;
   const initialOrder = heldOrders.find((order) => order.id === initialHeldOrderId);
   const [query, setQuery] = useState("");
@@ -154,6 +162,15 @@ export function RegisterSaleWorkspace({
   const [cart, setCart] = useState<Record<string, number>>(() =>
     Object.fromEntries(initialOrder?.items.map((item) => [item.itemId, item.quantity]) ?? []),
   );
+  const [trackedBill, setTrackedBill] = useState<TrackedBill | null>(() =>
+    initialOrder?.bill?.status === "UNPAID" ? initialOrder.bill : null,
+  );
+  const [trackingError, setTrackingError] = useState<string | null>(null);
+  const trackedBillRef = useRef<TrackedBill | null>(trackedBill);
+  const orderIdRef = useRef(heldOrderId);
+  const cartRef = useRef(cart);
+  const amendmentQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const queueAmendmentRef = useRef<(nextCart: Record<string, number>, nextNote?: string) => void>(() => undefined);
   const activeHeldOrder = heldOrders.find((order) => order.id === heldOrderId);
   const selectedRestaurantTable = restaurantTables.find(
     (table) => table.id === restaurantTableId,
@@ -189,30 +206,120 @@ export function RegisterSaleWorkspace({
     cartLines.map((item) => ({ itemId: item.id, quantity: item.quantity })),
   );
 
+  function clientItems(nextCart: Record<string, number>) {
+    return items.flatMap((item) => {
+      const quantity = nextCart[item.id] ?? 0;
+      return quantity > 0 ? [{ itemId: item.id, quantity }] : [];
+    });
+  }
+
+  function queueAmendment(
+    nextCart: Record<string, number>,
+    nextNote = customerNote,
+    nextTableId = restaurantTableId,
+    nextPaymentMethod = paymentMethod,
+  ) {
+    const bill = trackedBillRef.current;
+    const orderId = orderIdRef.current;
+    if (!bill || !orderId) return;
+    const payload = {
+      billId: bill.id,
+      heldOrderId: orderId,
+      restaurantTableId: nextTableId || null,
+      customerNote: nextNote || null,
+      paymentMethod: nextPaymentMethod,
+      items: clientItems(nextCart),
+    };
+    amendmentQueueRef.current = amendmentQueueRef.current.then(async () => {
+      const current = trackedBillRef.current;
+      if (!current || current.id !== payload.billId) return;
+      const result = await amendPrintedBillAction(shiftId, registerId, {
+        ...payload,
+        expectedVersion: current.version,
+      });
+      if (!result.ok) {
+        setTrackingError(result.error);
+        if (result.error.includes("changed elsewhere")) router.refresh();
+        return;
+      }
+      const next = { ...current, version: result.bill.version };
+      trackedBillRef.current = next;
+      setTrackedBill(next);
+      setTrackingError(null);
+    }).catch(() => setTrackingError("The bill amendment could not be saved."));
+  }
+
   function setQuantity(item: SellableItem, quantity: number) {
     const nextQuantity = Math.max(0, Math.min(quantity, item.stockQuantity));
     setCart((current) => {
       const next = { ...current };
       if (nextQuantity) next[item.id] = nextQuantity;
       else delete next[item.id];
+      queueAmendment(next);
       return next;
     });
   }
 
+  useEffect(() => {
+    queueAmendmentRef.current = queueAmendment;
+    cartRef.current = cart;
+  });
+
   function loadHeldOrder(orderId: string) {
     setHeldOrderId(orderId);
+    orderIdRef.current = orderId;
     const order = heldOrders.find((candidate) => candidate.id === orderId);
     if (!order) {
       setCart({});
       setCustomerNote("");
       setRestaurantTableId("");
       setPaymentMethod("CASH");
+      trackedBillRef.current = null;
+      setTrackedBill(null);
       return;
     }
     setCart(Object.fromEntries(order.items.map((item) => [item.itemId, item.quantity])));
     setCustomerNote(order.customerNote ?? "");
     setRestaurantTableId(order.restaurantTableId ?? "");
     setPaymentMethod(order.paymentMethod ?? "CASH");
+    const nextTracked = order.bill?.status === "UNPAID" ? order.bill : null;
+    trackedBillRef.current = nextTracked;
+    setTrackedBill(nextTracked);
+  }
+
+  useEffect(() => {
+    if (!trackedBillRef.current) return;
+    const timer = window.setTimeout(() => queueAmendmentRef.current(cartRef.current, customerNote), 350);
+    return () => window.clearTimeout(timer);
+  }, [customerNote]);
+
+  async function printUnpaidBill() {
+    setTrackingError(null);
+    await amendmentQueueRef.current;
+    const current = trackedBillRef.current;
+    const result = await printUnpaidBillAction(shiftId, registerId, {
+      billId: current?.id,
+      heldOrderId: orderIdRef.current || null,
+      expectedVersion: current?.version,
+      restaurantTableId: restaurantTableId || null,
+      customerNote: customerNote || null,
+      paymentMethod,
+      items: clientItems(cart),
+    });
+    if (!result.ok) {
+      setTrackingError(result.error);
+      return;
+    }
+    const next = { id: result.bill.id, billNumber: result.bill.billNumber, version: result.bill.version };
+    trackedBillRef.current = next;
+    orderIdRef.current = result.bill.orderId;
+    flushSync(() => {
+      setTrackedBill(next);
+      setHeldOrderId(result.bill.orderId);
+    });
+    document.body.setAttribute("data-print-target", "current");
+    window.addEventListener("afterprint", () => document.body.removeAttribute("data-print-target"), { once: true });
+    window.print();
   }
 
   const checkoutAction = checkoutRegisterSaleAction.bind(null, shiftId, registerId);
@@ -222,6 +329,7 @@ export function RegisterSaleWorkspace({
 
   return (
     <div className="grid gap-3.5">
+      {trackingError ? <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-xs text-destructive">{trackingError}</p> : null}
       {heldOrders.length ? (
         <nav aria-label="Physically held bills" className="flex max-w-full items-center gap-2 overflow-x-auto rounded-xl border border-border bg-card p-2">
           <button type="button" onClick={() => loadHeldOrder("")} className={cn("h-9 shrink-0 rounded-lg px-3 text-[11px] font-semibold", !heldOrderId ? "bg-primary text-primary-foreground" : "border border-border")}>New bill</button>
@@ -341,7 +449,7 @@ export function RegisterSaleWorkspace({
         <div className="flex min-h-[72px] items-center justify-between gap-3 border-b border-border px-[18px] py-3">
           <div className="min-w-0">
             <h2 className="text-[15px] font-bold leading-[19px]">Current order</h2>
-            <p className="mt-1 font-mono text-[10px] leading-[13px] text-muted-foreground">{activeHeldOrder ? `HELD TAB · ${activeHeldOrder.id.slice(0, 6).toUpperCase()}` : "NEW ORDER"}</p>
+            <p className="mt-1 font-mono text-[10px] leading-[13px] text-muted-foreground">{trackedBill ? `UNPAID BILL #${trackedBill.billNumber}` : activeHeldOrder ? `HELD TAB · ${activeHeldOrder.id.slice(0, 6).toUpperCase()}` : "NEW ORDER"}</p>
           </div>
           <div className="flex items-center gap-2">
             {heldOrderId && permissions.cancel ? (
@@ -360,15 +468,19 @@ export function RegisterSaleWorkspace({
             ) : null}
             <button
               type="button"
-              onClick={() => loadHeldOrder("")}
+              onClick={() => {
+                const wasTracked = Boolean(trackedBillRef.current);
+                loadHeldOrder("");
+                if (wasTracked) router.refresh();
+              }}
               className="h-[30px] rounded-[7px] border border-border px-2.5 text-[10px] text-muted-foreground"
             >
               Clear
             </button>
             <button
               type="button"
-              onClick={() => window.print()}
-              disabled={!cartLines.length}
+              onClick={() => void printUnpaidBill()}
+              disabled={!cartLines.length || !permissions.hold}
               aria-label="Print unpaid bill"
               title={cartLines.length ? "Print unpaid bill" : "Add an item before printing"}
               className="flex size-[30px] items-center justify-center rounded-[7px] border border-border text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
@@ -460,7 +572,10 @@ export function RegisterSaleWorkspace({
               <button
                 type="button"
                 key={method}
-                onClick={() => setPaymentMethod(method)}
+                onClick={() => {
+                  setPaymentMethod(method);
+                  queueAmendment(cart, customerNote, restaurantTableId, method);
+                }}
                 className={cn(
                   "rounded-lg border text-[11px]",
                   paymentMethod === method
@@ -478,7 +593,11 @@ export function RegisterSaleWorkspace({
                 TABLE FOR HELD BILL
                 <select
                   value={restaurantTableId}
-                  onChange={(event) => setRestaurantTableId(event.target.value)}
+                  onChange={(event) => {
+                    const nextTableId = event.target.value;
+                    setRestaurantTableId(nextTableId);
+                    queueAmendment(cart, customerNote, nextTableId);
+                  }}
                   className="h-10 min-w-0 rounded-lg border border-border bg-background px-3 text-xs text-foreground outline-none"
                 >
                   <option value="">Select a table</option>
@@ -515,77 +634,21 @@ export function RegisterSaleWorkspace({
         </div>
       </form>
 
-      <article className="current-order-print-root pointer-events-none fixed -left-[10000px] top-0 w-[48mm] bg-white font-mono text-[10px] leading-[1.35] text-black">
-        <header className="border-b border-dashed border-black pb-2 text-center">
-          <h1 className="text-sm font-bold">KANJO</h1>
-          <p className="mt-1">{registerName}</p>
-          <p>{registerCode}</p>
-        </header>
-        <div className="border-b border-dashed border-black py-2">
-          <div className="flex justify-between gap-2">
-            <span>Bill</span>
-            <strong>
-              {activeHeldOrder
-                ? `HELD ${activeHeldOrder.id.slice(0, 6).toUpperCase()}`
-                : "NEW ORDER"}
-            </strong>
-          </div>
-          <div className="flex justify-between gap-2">
-            <span>Cashier</span>
-            <span className="truncate text-right">{cashierName}</span>
-          </div>
-          {selectedRestaurantTable ? (
-            <div className="flex justify-between gap-2">
-              <span>Table</span>
-              <span className="text-right">{selectedRestaurantTable.name}</span>
-            </div>
-          ) : null}
-          {customerNote.trim() ? (
-            <div className="mt-1">
-              <span>Note</span>
-              <p className="break-words">{customerNote.trim()}</p>
-            </div>
-          ) : null}
-        </div>
-        <div className="grid gap-2 border-b border-dashed border-black py-2">
-          {cartLines.map((item) => (
-            <div key={item.id}>
-              <div className="flex justify-between gap-2 font-bold">
-                <span className="min-w-0 break-words">{item.name}</span>
-                <span className="shrink-0">
-                  {formatMvr(item.retailPriceLaari * item.quantity)}
-                </span>
-              </div>
-              <div className="flex justify-between gap-2">
-                <span>{item.quantity} × {formatMvr(item.retailPriceLaari)}</span>
-                {item.sku ? <span>{item.sku}</span> : null}
-              </div>
-            </div>
-          ))}
-        </div>
-        <div className="grid gap-1 py-2">
-          <div className="flex justify-between">
-            <span>Subtotal · {itemCount} items</span>
-            <span>{formatMvr(totalLaari)}</span>
-          </div>
-          <div className="flex justify-between">
-            <span>Tax</span>
-            <span>Included</span>
-          </div>
-          <div className="flex justify-between text-xs font-bold">
-            <span>TOTAL</span>
-            <span>{formatMvr(totalLaari)}</span>
-          </div>
-          <div className="flex justify-between">
-            <span>Payment</span>
-            <span>Pending</span>
-          </div>
-        </div>
-        <footer className="border-t border-dashed border-black pt-2 text-center">
-          <p className="text-sm font-black tracking-[0.18em]">UNPAID</p>
-          <p className="mt-1">Powered by Kanjo</p>
-        </footer>
-      </article>
+      <PrintableBill
+        className="current-order-print-root pointer-events-none fixed -left-[10000px] top-0"
+        registerName={registerName}
+        registerCode={registerCode}
+        billNumber={trackedBill?.billNumber ?? "PENDING"}
+        cashierName={cashierName}
+        tableName={selectedRestaurantTable?.name}
+        customerNote={customerNote.trim() || null}
+        items={cartLines.map((item) => ({ key: item.id, name: item.name, sku: item.sku, quantity: item.quantity, unitPriceLaari: item.retailPriceLaari, lineTotalLaari: item.retailPriceLaari * item.quantity }))}
+        subtotalLaari={totalLaari}
+        totalLaari={totalLaari}
+        paymentMethod={null}
+        status="UNPAID"
+        showIncludedTax
+      />
       </section>
     </div>
   );

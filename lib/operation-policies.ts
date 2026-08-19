@@ -8,7 +8,7 @@ export type CapabilityOperationPolicy = {
 
 export type SiteAdminOperationPolicy = {
   siteAdmin: true;
-  page: "SETTINGS";
+  page: PageKey;
   scope: "GLOBAL";
 };
 
@@ -47,6 +47,8 @@ export const OPERATION_POLICIES = {
   CUSTOMER_UPDATE: { capability: "CUSTOMER_UPDATE", page: "CUSTOMERS", scope: "GLOBAL" },
   CUSTOMER_CREDIT_LIMIT_UPDATE: { capability: "CUSTOMER_CREDIT_LIMIT_UPDATE", page: "CUSTOMERS", scope: "GLOBAL" },
   CUSTOMER_CREDIT_SETTLE: { capability: "CUSTOMER_CREDIT_SETTLE", page: "CUSTOMERS", scope: "ENTITY" },
+  BILL_AMEND: { siteAdmin: true, page: "REGISTERS", scope: "GLOBAL" },
+  BILL_REVERSE: { siteAdmin: true, page: "REGISTERS", scope: "GLOBAL" },
   ROLE_CREATE: { siteAdmin: true, page: "SETTINGS", scope: "GLOBAL" },
   ROLE_UPDATE: { siteAdmin: true, page: "SETTINGS", scope: "GLOBAL" },
   ROLE_DELETE: { siteAdmin: true, page: "SETTINGS", scope: "GLOBAL" },

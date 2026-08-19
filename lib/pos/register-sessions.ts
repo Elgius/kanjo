@@ -1,30 +1,27 @@
 import "server-only";
 
-import type { PaymentMethod, SaleStatus, ShiftStatus } from "@/generated/prisma/enums";
+import { Prisma } from "@/generated/prisma/client";
+import type { BillRevisionKind, BillStatus, PaymentMethod, ShiftStatus } from "@/generated/prisma/enums";
 import { prisma } from "@/lib/db";
+import { parseBillSnapshot, type BillSnapshot } from "@/lib/pos/bill-revisions";
 import { summarizeSessionDetails } from "@/lib/pos/session-details";
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export type SessionTransaction = {
   id: string;
-  receiptNumber: string;
-  status: SaleStatus;
+  version: number;
+  saleId: string | null;
+  billNumber: string;
+  receiptNumber: string | null;
+  status: BillStatus;
   paymentMethod: PaymentMethod;
   subtotalLaari: number;
   totalLaari: number;
-  createdAt: string;
+  openedAt: string;
   cashierName: string;
-  hasSavedBill: boolean;
-  items: Array<{
-    id: string;
-    productName: string;
-    productSku: string | null;
-    itemCategory: string;
-    quantity: number;
-    unitPriceLaari: number;
-    lineTotalLaari: number;
-  }>;
+  items: Array<BillSnapshot["items"][number] & { saleItemId: string | null; stockTrackedQuantity: number }>;
+  revisions: Array<{ id: string; revision: number; kind: BillRevisionKind; actorName: string; changes: string[]; createdAt: string }>;
 };
 
 export async function getSessionRegisters(authorizedRegisterIds: readonly string[] | null = null) {
@@ -175,6 +172,40 @@ export async function getRegisterSession(registerId: string, sessionId: string, 
           },
         },
       },
+      bills: {
+        orderBy: { openedAt: "desc" },
+        select: {
+          id: true,
+          version: true,
+          saleId: true,
+          billNumber: true,
+          receiptNumber: true,
+          status: true,
+          paymentMethod: true,
+          subtotalLaari: true,
+          totalLaari: true,
+          items: true,
+          customerNote: true,
+          restaurantTableId: true,
+          restaurantTableName: true,
+          openedAt: true,
+          openedByName: true,
+          sale: {
+            select: {
+              items: {
+                orderBy: { id: "asc" },
+                select: {
+                  id: true, productId: true, menuItemId: true, productName: true, productSku: true,
+                  itemCategory: true, quantity: true, unitPriceLaari: true, lineTotalLaari: true,
+                  stockComponents: { select: { productId: true, measuredPerItem: true } },
+                  inventoryConsumptions: { select: { productId: true, consumedQuantity: true, restoredQuantity: true, retiredQuantity: true } },
+                },
+              },
+            },
+          },
+          revisions: { orderBy: { revision: "asc" }, select: { id: true, revision: true, kind: true, actorName: true, changes: true, createdAt: true } },
+        },
+      },
     },
   });
   if (!session) return null;
@@ -196,18 +227,56 @@ export async function getRegisterSession(registerId: string, sessionId: string, 
         session.closingCashLaari === null ? null : session.closingCashLaari - expectedCashLaari,
     },
     details: summarizeSessionDetails(session.sales),
-    transactions: session.sales.map<SessionTransaction>((sale) => ({
-      id: sale.id,
-      receiptNumber: sale.receiptNumber.toString(),
-      status: sale.status,
-      paymentMethod: sale.paymentMethod,
-      subtotalLaari: sale.subtotalLaari,
-      totalLaari: sale.totalLaari,
-      createdAt: sale.createdAt.toISOString(),
-      cashierName: sale.createdBy.name,
-      hasSavedBill: Boolean(sale.bill),
-      items: sale.items,
-    })),
+    transactions: session.bills.map<SessionTransaction>((bill) => {
+      const snapshot = parseBillSnapshot({
+        items: bill.items,
+        subtotalLaari: bill.subtotalLaari,
+        totalLaari: bill.totalLaari,
+        paymentMethod: bill.paymentMethod,
+        customerNote: bill.customerNote,
+        restaurantTableId: bill.restaurantTableId,
+        restaurantTableName: bill.restaurantTableName,
+      } as unknown as Prisma.JsonValue);
+      return {
+        id: bill.id,
+        version: bill.version,
+        saleId: bill.saleId,
+        billNumber: bill.billNumber.toString(),
+        receiptNumber: bill.receiptNumber?.toString() ?? null,
+        status: bill.status,
+        paymentMethod: bill.paymentMethod,
+        subtotalLaari: bill.subtotalLaari,
+        totalLaari: bill.totalLaari,
+        openedAt: bill.openedAt.toISOString(),
+        cashierName: bill.openedByName,
+        items: bill.sale?.items.length
+          ? bill.sale.items.filter((item) => item.quantity > 0).map((item) => ({
+              saleItemId: item.id,
+              productId: item.productId,
+              menuItemId: item.menuItemId,
+              productName: item.productName,
+              productSku: item.productSku,
+              itemCategory: item.itemCategory,
+              quantity: item.quantity,
+              unitPriceLaari: item.unitPriceLaari,
+              lineTotalLaari: item.lineTotalLaari,
+              stockTrackedQuantity: item.stockComponents.length
+                ? Math.max(0, Math.floor(Math.min(...item.stockComponents.map((component) => {
+                    const active = item.inventoryConsumptions
+                      .filter((entry) => entry.productId === component.productId)
+                      .reduce((total, entry) => total + Number(entry.consumedQuantity) - Number(entry.restoredQuantity) - Number(entry.retiredQuantity), 0);
+                    return active / Number(component.measuredPerItem);
+                  })) + 0.0004))
+                : item.quantity,
+            }))
+          : (snapshot?.items ?? []).map((item) => ({ ...item, saleItemId: null, stockTrackedQuantity: 0 })),
+        revisions: bill.revisions.map((revision) => ({
+          ...revision,
+          changes: Array.isArray(revision.changes) ? revision.changes.filter((change): change is string => typeof change === "string") : [],
+          createdAt: revision.createdAt.toISOString(),
+        })),
+      };
+    }),
   };
 }
 

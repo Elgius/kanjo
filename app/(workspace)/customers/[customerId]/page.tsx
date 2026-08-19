@@ -50,7 +50,7 @@ export default async function CustomerDetailPage({
   const error = single(query.error);
   const editing = single(query.edit) === "1";
   const outstandingBills = customer.creditBills.filter((bill) => bill.status === "OUTSTANDING");
-  const paidBills = customer.creditBills.filter((bill) => bill.status === "PAID");
+  const paidBills = customer.creditBills.filter((bill) => bill.status === "PAID" || bill.status === "REVERSED");
   const atLimit = customer.outstandingLaari >= customer.creditLimitLaari;
 
   return (
@@ -114,7 +114,7 @@ export default async function CustomerDetailPage({
           <Surface className="overflow-hidden">
             <header className="flex items-end justify-between border-b border-border px-5 py-5"><div><h2 className="text-sm font-semibold">Paid bill history</h2><p className="mt-1 text-[11px] text-muted-foreground">Settled customer credit, newest first.</p></div><span className="text-[11px] text-muted-foreground">{paidBills.length} paid</span></header>
             {paidBills.length ? <div className="divide-y divide-border">{paidBills.map((bill) => (
-              <div key={bill.id} className="grid gap-3 px-5 py-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"><div className="flex items-start gap-3"><span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-secondary"><ReceiptText className="size-4" aria-hidden="true" /></span><div><p className="text-xs font-semibold">Receipt #{bill.receiptNumber}</p><p className="mt-1 text-[10px] text-muted-foreground">{bill.register.name} · {bill.sale?.paymentMethod === "MOBILE" ? "Mobile pay" : bill.sale?.paymentMethod?.toLowerCase()} · {bill.paidAt ? formatDateTime(bill.paidAt) : "Paid"}</p></div></div><p className="font-mono text-sm font-semibold">{formatMvr(bill.totalLaari)}</p></div>
+              <div key={bill.id} className="grid gap-3 px-5 py-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"><div className="flex items-start gap-3"><span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-secondary"><ReceiptText className="size-4" aria-hidden="true" /></span><div><div className="flex items-center gap-2"><p className="text-xs font-semibold">Receipt #{bill.receiptNumber}</p>{bill.status === "REVERSED" ? <span className="rounded-full bg-destructive/10 px-2 py-0.5 text-[9px] font-semibold text-destructive">REVERSED</span> : null}</div><p className="mt-1 text-[10px] text-muted-foreground">{bill.register.name} · {bill.sale?.paymentMethod === "MOBILE" ? "Mobile pay" : bill.sale?.paymentMethod?.toLowerCase()} · {bill.paidAt ? formatDateTime(bill.paidAt) : "Paid"}</p></div></div><p className="font-mono text-sm font-semibold">{formatMvr(bill.totalLaari)}</p></div>
             ))}</div> : <div className="flex min-h-36 items-center justify-center px-5 text-center text-xs text-muted-foreground">No paid customer bills yet.</div>}
           </Surface>
         </div>

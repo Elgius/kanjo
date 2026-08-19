@@ -3,7 +3,8 @@
 import { useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 
-import { formatMvr } from "@/lib/pos/money";
+import { PrintableBill } from "@/components/pos/printable-bill";
+import type { BillStatus } from "@/generated/prisma/enums";
 
 export type PrintableReceipt = {
   id: string;
@@ -13,6 +14,7 @@ export type PrintableReceipt = {
   paymentMethod: "CASH" | "CARD" | "MOBILE";
   createdAt: string;
   createdBy: { name: string };
+  bill: { billNumber: string; status: BillStatus } | null;
   items: Array<{
     id: string;
     productName: string;
@@ -46,9 +48,12 @@ export function ReceiptPrintDialog({
     router.replace(`/registers/${registerId}`, { scroll: false });
   }
 
-  const payment = receipt.paymentMethod === "MOBILE"
-    ? "Mobile pay"
-    : receipt.paymentMethod[0] + receipt.paymentMethod.slice(1).toLowerCase();
+  function print() {
+    document.body.setAttribute("data-print-target", "receipt");
+    window.addEventListener("afterprint", () => document.body.removeAttribute("data-print-target"), { once: true });
+    window.print();
+  }
+
   const createdAt = new Intl.DateTimeFormat("en-GB", {
     timeZone: "Indian/Maldives",
     dateStyle: "medium",
@@ -65,40 +70,26 @@ export function ReceiptPrintDialog({
         </div>
 
         <div className="flex justify-center rounded-lg border border-border bg-white p-4">
-          <article className="receipt-print-root w-[48mm] bg-white font-mono text-[10px] leading-[1.35] text-black">
-            <header className="border-b border-dashed border-black pb-2 text-center">
-              <h1 className="text-sm font-bold">KANJO</h1>
-              <p className="mt-1">{registerName}</p>
-              <p>{registerCode}</p>
-            </header>
-            <div className="border-b border-dashed border-black py-2">
-              <div className="flex justify-between gap-2"><span>Receipt</span><strong>#{receipt.receiptNumber}</strong></div>
-              <div className="flex justify-between gap-2"><span>Date</span><span className="text-right">{createdAt}</span></div>
-              <div className="flex justify-between gap-2"><span>Cashier</span><span className="truncate text-right">{receipt.createdBy.name}</span></div>
-            </div>
-            <div className="grid gap-2 border-b border-dashed border-black py-2">
-              {receipt.items.map((item) => (
-                <div key={item.id}>
-                  <div className="flex justify-between gap-2 font-bold"><span className="min-w-0 break-words">{item.productName}</span><span className="shrink-0">{formatMvr(item.lineTotalLaari)}</span></div>
-                  <div className="flex justify-between gap-2"><span>{item.quantity} × {formatMvr(item.unitPriceLaari)}</span>{item.productSku ? <span>{item.productSku}</span> : null}</div>
-                </div>
-              ))}
-            </div>
-            <div className="grid gap-1 py-2">
-              <div className="flex justify-between"><span>Subtotal</span><span>{formatMvr(receipt.subtotalLaari)}</span></div>
-              <div className="flex justify-between text-xs font-bold"><span>TOTAL</span><span>{formatMvr(receipt.totalLaari)}</span></div>
-              <div className="flex justify-between"><span>Payment</span><span>{payment}</span></div>
-            </div>
-            <footer className="border-t border-dashed border-black pt-2 text-center">
-              <p>Thank you</p>
-              <p className="mt-1">Powered by Kanjo</p>
-            </footer>
-          </article>
+          <PrintableBill
+            className="receipt-print-root"
+            registerName={registerName}
+            registerCode={registerCode}
+            billNumber={receipt.bill?.billNumber ?? receipt.receiptNumber}
+            receiptNumber={receipt.receiptNumber}
+            dateLabel="Date"
+            dateValue={createdAt}
+            cashierName={receipt.createdBy.name}
+            items={receipt.items.map((item) => ({ key: item.id, name: item.productName, sku: item.productSku, quantity: item.quantity, unitPriceLaari: item.unitPriceLaari, lineTotalLaari: item.lineTotalLaari }))}
+            subtotalLaari={receipt.subtotalLaari}
+            totalLaari={receipt.totalLaari}
+            paymentMethod={receipt.paymentMethod}
+            status={receipt.bill?.status ?? "PAID"}
+          />
         </div>
 
         <div className="flex justify-end gap-2.5">
           <button type="button" onClick={close} className="h-10 rounded-lg border border-border px-4 text-xs font-semibold">No, thanks</button>
-          <button type="button" onClick={() => window.print()} className="h-10 rounded-lg bg-primary px-4 text-xs font-semibold text-primary-foreground">Yes, print bill</button>
+          <button type="button" onClick={print} className="h-10 rounded-lg bg-primary px-4 text-xs font-semibold text-primary-foreground">Yes, print bill</button>
         </div>
       </div>
     </dialog>

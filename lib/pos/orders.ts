@@ -1,5 +1,6 @@
 import type { PrismaClient } from "@/generated/prisma/client";
 import { auditCreateData, type AuditRequestContext } from "@/lib/audit-core";
+import { describeBillChanges, itemsJson, makeBillSnapshot, parseBillSnapshot, snapshotJson } from "@/lib/pos/bill-revisions";
 import { PosError } from "@/lib/pos/sales";
 
 type HeldOrderItem = { itemId: string; quantity: number };
@@ -7,6 +8,7 @@ type HeldOrderItem = { itemId: string; quantity: number };
 export type HoldRegisterOrderInput = {
   shiftId: string;
   createdById: string;
+  actorName?: string;
   heldOrderId?: string | null;
   restaurantTableId?: string | null;
   customerNote?: string | null;
@@ -38,6 +40,7 @@ export async function holdRegisterOrder(db: PrismaClient, input: HoldRegisterOrd
     if (!shift) throw new PosError("The selected register does not have an open shift.");
 
     let restaurantTableId: string | null = null;
+    let restaurantTable: { id: string; name: string } | null = null;
     if (shift.register.purpose === "RESTAURANT") {
       if (!input.restaurantTableId) {
         throw new PosError("Select a restaurant table before holding this bill.");
@@ -64,6 +67,7 @@ export async function holdRegisterOrder(db: PrismaClient, input: HoldRegisterOrd
       if (!table) throw new PosError("Select an active table from this restaurant.");
       if (table.orders.length) throw new PosError(`${table.name} already has an open bill.`);
       restaurantTableId = table.id;
+      restaurantTable = { id: table.id, name: table.name };
     }
 
     let lines: Array<{
@@ -171,7 +175,10 @@ export async function holdRegisterOrder(db: PrismaClient, input: HoldRegisterOrd
           registerShiftId: shift.id,
           status: "HELD",
         },
-        select: { id: true },
+        select: { id: true, bill: { select: {
+          id: true, version: true, status: true, items: true, subtotalLaari: true, totalLaari: true,
+          paymentMethod: true, customerNote: true, restaurantTableId: true, restaurantTableName: true,
+        } } },
       });
       if (!existing) throw new PosError("That held order is no longer available.");
       await tx.registerOrderItem.deleteMany({ where: { orderId: existing.id } });
@@ -182,6 +189,42 @@ export async function holdRegisterOrder(db: PrismaClient, input: HoldRegisterOrd
           items: { create: lines },
         },
       });
+      if (existing.bill) {
+        if (existing.bill.status !== "UNPAID") throw new PosError("That bill is no longer unpaid.");
+        const before = parseBillSnapshot({
+          items: existing.bill.items,
+          subtotalLaari: existing.bill.subtotalLaari,
+          totalLaari: existing.bill.totalLaari,
+          paymentMethod: existing.bill.paymentMethod,
+          customerNote: existing.bill.customerNote,
+          restaurantTableId: existing.bill.restaurantTableId,
+          restaurantTableName: existing.bill.restaurantTableName,
+        } as never);
+        if (!before) throw new PosError("That bill has invalid snapshot data.");
+        const after = makeBillSnapshot(lines, input.paymentMethod ?? existing.bill.paymentMethod, input.customerNote ?? null, restaurantTable);
+        const changes = describeBillChanges(before, after);
+        if (changes.length) {
+          const version = existing.bill.version + 1;
+          await tx.bill.update({ where: { id: existing.bill.id }, data: {
+            paymentMethod: after.paymentMethod,
+            subtotalLaari: after.subtotalLaari,
+            totalLaari: after.totalLaari,
+            items: itemsJson(after),
+            customerNote: after.customerNote,
+            restaurantTableId: after.restaurantTableId,
+            restaurantTableName: after.restaurantTableName,
+            version,
+            revisions: { create: {
+              revision: version,
+              kind: "AMENDMENT",
+              actorId: input.createdById,
+              actorName: input.actorName ?? input.audit.actorLabel,
+              changes,
+              snapshot: snapshotJson(after),
+            } },
+          } });
+        }
+      }
     } else {
       order = await tx.registerOrder.create({
         data: { ...data, registerShiftId: shift.id },

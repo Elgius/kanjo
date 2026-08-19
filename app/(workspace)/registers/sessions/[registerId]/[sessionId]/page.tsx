@@ -71,7 +71,14 @@ export default async function RegisterSessionPage({
           </div>
           <span className="text-[11px] text-muted-foreground">{session.transactions.length} total</span>
         </header>
-        <SessionTransactions transactions={session.transactions} registerName={session.register.name} registerCode={session.register.code} />
+        <SessionTransactions
+          transactions={session.transactions}
+          registerName={session.register.name}
+          registerCode={session.register.code}
+          registerId={session.register.id}
+          sessionId={session.id}
+          canCorrectBills={authorization.user.isSiteAdmin}
+        />
       </Surface>
     </PageContainer>
   );
