@@ -4,10 +4,13 @@ import type { AuditOutcome, PageKey } from "@/generated/prisma/enums";
 const auditOutcomes = new Set<AuditOutcome>(["SUCCESS", "FAILURE", "DENIED"]);
 const auditPages = new Set<PageKey>([
   "OVERVIEW",
+  "AI_COO",
   "REGISTERS",
   "INVENTORY",
   "STOCK",
   "REPORTING",
+  "BILL_HISTORY",
+  "CUSTOMERS",
   "SETTINGS",
   "AUDIT_LOG",
 ]);

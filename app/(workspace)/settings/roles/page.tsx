@@ -2,6 +2,7 @@ import { PageContainer, PageHeader, Surface } from "@/components/pos/primitives"
 import { notFound } from "next/navigation";
 import { requireCapability } from "@/lib/authorization";
 import { prisma } from "@/lib/db";
+import { getSettingsRoles } from "@/lib/settings-queries";
 import { cn } from "@/lib/utils";
 import { createRoleAction, deleteRoleAction, updateRoleAction } from "../actions";
 import { CapabilityEditor } from "./capability-editor";
@@ -17,14 +18,7 @@ export default async function RolesPage({ searchParams }: PageProps<"/settings/r
   if (!authorization.user.isSiteAdmin) notFound();
   const params = await searchParams;
   const [roles, registers] = await Promise.all([
-    prisma.role.findMany({
-      orderBy: { name: "asc" },
-      include: {
-        capabilities: true,
-        registerAccess: true,
-        _count: { select: { users: true } },
-      },
-    }),
+    getSettingsRoles(),
     prisma.cashRegister.findMany({
       orderBy: [{ active: "desc" }, { name: "asc" }],
       select: { id: true, name: true, code: true, active: true },

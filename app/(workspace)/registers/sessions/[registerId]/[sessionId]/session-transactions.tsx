@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Eye, ReceiptText, X } from "lucide-react";
+import { Eye, FileCheck2, ReceiptText, X } from "lucide-react";
 
+import { PaymentSlipDialog, type PaymentSlipReference } from "@/components/pos/payment-slip-dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatMvr } from "@/lib/pos/money";
 import type { SessionTransaction } from "@/lib/pos/register-sessions";
@@ -130,6 +131,7 @@ export function SessionTransactions({
   canCorrectBills: boolean;
 }) {
   const [selected, setSelected] = useState<SessionTransaction | null>(null);
+  const [selectedSlip, setSelectedSlip] = useState<PaymentSlipReference | null>(null);
   const [correction, setCorrection] = useState<{ transaction: SessionTransaction; mode: "AMEND" | "REVERSE" } | null>(null);
 
   if (!transactions.length) {
@@ -158,7 +160,7 @@ export function SessionTransactions({
         <TableBody>
           {transactions.map((transaction) => (
             <TableRow key={transaction.id} className="h-[66px] hover:bg-accent/40">
-              <TableCell className="pl-5 sm:pl-6"><span className="block font-mono text-[11px] font-semibold">Bill #{transaction.billNumber}</span><span className="mt-0.5 block text-[9px] text-muted-foreground">{transaction.receiptNumber ? `Receipt #${transaction.receiptNumber}` : "No receipt yet"}</span></TableCell>
+              <TableCell className="pl-5 sm:pl-6"><span className="flex items-center gap-1.5 font-mono text-[11px] font-semibold">Bill #{transaction.billNumber}{transaction.paymentSlip ? <button type="button" aria-label={`View payment slip for bill ${transaction.billNumber}`} title="View uploaded payment slip" onClick={() => setSelectedSlip({ billId: transaction.id, billNumber: transaction.billNumber, ...transaction.paymentSlip! })} className="flex size-6 items-center justify-center rounded-md bg-chart-1/10 text-chart-1 hover:bg-chart-1/20"><FileCheck2 className="size-3.5" aria-hidden="true" /></button> : null}</span><span className="mt-0.5 block text-[9px] text-muted-foreground">{transaction.receiptNumber ? `Receipt #${transaction.receiptNumber}` : "No receipt yet"}</span></TableCell>
               <TableCell className="text-[11px]">{formatDateTime(transaction.openedAt)}</TableCell>
               <TableCell>{transaction.cashierName}</TableCell>
               <TableCell>{transaction.status !== "UNPAID" && transaction.status !== "CANCELLED" ? paymentLabel(transaction.paymentMethod) : "Pending"}</TableCell>
@@ -176,6 +178,7 @@ export function SessionTransactions({
       </Table>
 
       {selected ? <TransactionDialog transaction={selected} registerName={registerName} registerCode={registerCode} canCorrectBills={canCorrectBills} onCorrect={(mode) => { setCorrection({ transaction: selected, mode }); setSelected(null); }} onClose={() => setSelected(null)} /> : null}
+      {selectedSlip ? <PaymentSlipDialog key={`${selectedSlip.billId}:${selectedSlip.uploadedAt}`} slip={selectedSlip} onClose={() => setSelectedSlip(null)} /> : null}
       {correction ? <PaidBillCorrectionDialog transaction={correction.transaction} mode={correction.mode} registerId={registerId} sessionId={sessionId} onClose={() => setCorrection(null)} /> : null}
     </>
   );

@@ -25,6 +25,8 @@ export type PrintedBillInput = {
   customerNote?: string | null;
   paymentMethod: PaymentMethod;
   items: ReadonlyArray<{ itemId: string; quantity: number }>;
+  source?: "PRINT" | "PAYMENT_LINK";
+  paymentPhone?: { display: string; normalized: string };
   audit: { actorLabel: string; request?: AuditRequestContext };
 };
 
@@ -248,7 +250,7 @@ export async function trackPrintedBill(db: PrismaClient, input: PrintedBillInput
         input.expectedVersion,
         snapshot,
         { id: input.actorId, name: input.actorName },
-        true,
+        input.source !== "PAYMENT_LINK",
       );
       bill = { id: existing.id, billNumber: existing.billNumber, version };
     } else {
@@ -278,7 +280,9 @@ export async function trackPrintedBill(db: PrismaClient, input: PrintedBillInput
               kind: "INITIAL_PRINT",
               actorId: input.actorId,
               actorName: input.actorName,
-              changes: eventChanges("INITIAL_PRINT", snapshot),
+              changes: input.source === "PAYMENT_LINK"
+                ? ["Payment link created."]
+                : eventChanges("INITIAL_PRINT", snapshot),
               snapshot: snapshotJson(snapshot),
             },
           },
@@ -288,16 +292,42 @@ export async function trackPrintedBill(db: PrismaClient, input: PrintedBillInput
       bill = created;
     }
 
+    const paymentLink = input.source === "PAYMENT_LINK";
+    if (paymentLink) {
+      if (!input.paymentPhone) throw new PosError("Enter a valid phone number.");
+      const createdAt = new Date();
+      const expiresAt = new Date(createdAt.getTime() + 60 * 60 * 1000);
+      await tx.paymentLink.upsert({
+        where: { billId: bill.id },
+        create: {
+          billId: bill.id,
+          phoneNumber: input.paymentPhone.display,
+          normalizedPhoneNumber: input.paymentPhone.normalized,
+          createdAt,
+          expiresAt,
+        },
+        update: {
+          phoneNumber: input.paymentPhone.display,
+          normalizedPhoneNumber: input.paymentPhone.normalized,
+          createdAt,
+          expiresAt,
+        },
+      });
+    }
     await tx.auditLog.create({
       data: auditCreateData({
         outcome: "SUCCESS",
-        event: existing ? "BILL_REPRINT" : "BILL_TRACK_START",
+        event: paymentLink ? "PAYMENT_LINK_CREATED" : existing ? "BILL_REPRINT" : "BILL_TRACK_START",
         page: "REGISTERS",
         actorId: input.actorId,
         actorLabel: input.audit.actorLabel,
         targetType: "bill",
         targetId: bill.id,
-        summary: existing ? "Unpaid bill reprinted." : "Unpaid bill tracking started.",
+        summary: paymentLink
+          ? "Payment link created for unpaid bill."
+          : existing
+            ? "Unpaid bill reprinted."
+            : "Unpaid bill tracking started.",
         metadata: { registerId: shift.registerId, shiftId: shift.id, orderId, billNumber: bill.billNumber },
         request: input.audit.request,
       }),

@@ -7,6 +7,7 @@ import type {
 
 export const PAGE_DEFINITIONS = [
   { key: "OVERVIEW", label: "Overview", href: "/", editable: false },
+  { key: "AI_COO", label: "AI COO", href: "/ai-coo", editable: false },
   { key: "REGISTERS", label: "Registers", href: "/registers", editable: true },
   { key: "INVENTORY", label: "Inventory", href: "/inventory", editable: true },
   { key: "STOCK", label: "Stock", href: "/stock", editable: false },
@@ -39,6 +40,7 @@ export type CapabilityDefinition = {
 
 export const CAPABILITY_DEFINITIONS = [
   { key: "OVERVIEW_VIEW", label: "View overview", description: "View overview totals for authorized registers.", group: "Read access", page: "OVERVIEW", scope: "REGISTER", mutation: false },
+  { key: "AI_COO_ACCESS", label: "Use AI COO", description: "Use every read-only AI COO domain tool across all registers.", group: "AI COO", page: "AI_COO", scope: "GLOBAL", mutation: false },
   { key: "REGISTERS_VIEW", label: "Select registers", description: "View and select authorized registers.", group: "Read access", page: "REGISTERS", scope: "REGISTER", mutation: false },
   { key: "REGISTER_ADMIN_VIEW", label: "View register administration", description: "View register configuration for authorized registers.", group: "Read access", page: "REGISTERS", scope: "REGISTER", mutation: false },
   { key: "REGISTER_SESSIONS_VIEW", label: "View sessions", description: "Open session history and view shifts and transactions for authorized registers.", group: "Read access", page: "REGISTERS", scope: "REGISTER", mutation: false },
@@ -149,7 +151,9 @@ const INVENTORY_CLERK: CapabilityKey[] = [
   "OVERVIEW_VIEW", "INVENTORY_VIEW", "STOCK_VIEW", "PRODUCT_CREATE", "PRODUCT_UPDATE",
   "STOCK_RECEIVE", "BATCH_EXPIRY_UPDATE", "STOCK_WRITE_OFF",
 ];
-const AUDITOR = CAPABILITY_DEFINITIONS.filter(({ mutation }) => !mutation).map(({ key }) => key);
+const AUDITOR = CAPABILITY_DEFINITIONS
+  .filter(({ key, mutation }) => !mutation && key !== "AI_COO_ACCESS")
+  .map(({ key }) => key);
 
 export const ROLE_PRESETS = [
   { key: "CASHIER", label: "Cashier", scopeMode: "SELECTED", capabilities: CASHIER },
@@ -204,6 +208,7 @@ export function registerScopeAllows(
 
 const LEGACY_PAGE_CAPABILITIES: Record<PageKey, { view: CapabilityKey[]; edit: CapabilityKey[] }> = {
   OVERVIEW: { view: ["OVERVIEW_VIEW"], edit: [] },
+  AI_COO: { view: ["AI_COO_ACCESS"], edit: [] },
   REGISTERS: {
     view: ["REGISTERS_VIEW", "REGISTER_ADMIN_VIEW", "REGISTER_SESSIONS_VIEW", "RESTAURANT_MENU_VIEW", "RESTAURANT_FLOOR_VIEW"],
     edit: ["REGISTER_CREATE_GLOBAL", "REGISTER_RENAME", "REGISTER_TYPE_CHANGE", "REGISTER_ARCHIVE", "REGISTER_DELETE", "SHIFT_OPEN", "SHIFT_CLOSE", "SHIFT_OVERRIDE", "SALE_RECORD", "ORDER_HOLD", "ORDER_CANCEL", "CUSTOMER_CREDIT_ISSUE", "MENU_ITEM_CREATE", "MENU_ITEM_UPDATE", "RESTAURANT_TABLE_CREATE", "RESTAURANT_TABLE_UPDATE"],

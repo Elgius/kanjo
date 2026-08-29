@@ -477,24 +477,54 @@ export async function getCustomerOptions() {
   });
 }
 
-export async function getCustomersOverview() {
-  const customers = await prisma.customer.findMany({
-    where: { active: true },
-    orderBy: { name: "asc" },
-    select: {
-      id: true,
-      name: true,
-      email: true,
-      phoneNumber: true,
-      nationality: true,
-      creditLimitLaari: true,
-      updatedAt: true,
-      creditBills: {
-        where: { status: "OUTSTANDING" },
-        select: { totalLaari: true },
+export type CustomerOverviewFilters = { query?: string; page?: number; pageSize?: number };
+
+export async function getCustomersOverview(filters: CustomerOverviewFilters = {}) {
+  const bounded = filters.query !== undefined || filters.page !== undefined || filters.pageSize !== undefined;
+  const query = filters.query?.trim().slice(0, 100);
+  const page = Math.max(1, Math.floor(filters.page ?? 1));
+  const pageSize = Math.min(50, Math.max(1, Math.floor(filters.pageSize ?? 50)));
+  const where = {
+    active: true,
+    ...(query ? {
+      OR: [
+        { name: { contains: query, mode: "insensitive" as const } },
+        { email: { contains: query, mode: "insensitive" as const } },
+        { phoneNumber: { contains: query, mode: "insensitive" as const } },
+        { nationality: { contains: query, mode: "insensitive" as const } },
+      ],
+    } : {}),
+  };
+  const [customers, matchingCustomers, metricCustomers, outstandingGroups] = await Promise.all([
+    prisma.customer.findMany({
+      where,
+      orderBy: { name: "asc" },
+      ...(bounded ? { skip: (page - 1) * pageSize, take: pageSize } : {}),
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        phoneNumber: true,
+        nationality: true,
+        creditLimitLaari: true,
+        updatedAt: true,
+        creditBills: {
+          where: { status: "OUTSTANDING" },
+          select: { totalLaari: true },
+        },
       },
-    },
-  });
+    }),
+    prisma.customer.count({ where }),
+    prisma.customer.findMany({
+      where: { active: true },
+      select: { id: true, creditLimitLaari: true },
+    }),
+    prisma.customerCreditBill.groupBy({
+      by: ["customerId"],
+      where: { status: "OUTSTANDING", customer: { active: true } },
+      _sum: { totalLaari: true },
+    }),
+  ]);
   const rows = customers.map((customer) => {
     const outstandingLaari = customer.creditBills.reduce((total, bill) => total + bill.totalLaari, 0);
     return {
@@ -504,13 +534,30 @@ export async function getCustomersOverview() {
       atLimit: outstandingLaari >= customer.creditLimitLaari,
     };
   });
+  const outstandingByCustomer = new Map(
+    outstandingGroups.map((group) => [group.customerId, group._sum.totalLaari ?? 0]),
+  );
+  const metricRows = metricCustomers.map((customer) => {
+    const outstandingLaari = outstandingByCustomer.get(customer.id) ?? 0;
+    return {
+      outstandingLaari,
+      availableCreditLaari: Math.max(0, customer.creditLimitLaari - outstandingLaari),
+      atLimit: outstandingLaari >= customer.creditLimitLaari,
+    };
+  });
   return {
     customers: rows,
     metrics: {
-      customers: rows.length,
-      outstandingLaari: rows.reduce((total, customer) => total + customer.outstandingLaari, 0),
-      availableCreditLaari: rows.reduce((total, customer) => total + customer.availableCreditLaari, 0),
-      atLimit: rows.filter((customer) => customer.atLimit).length,
+      customers: metricRows.length,
+      outstandingLaari: metricRows.reduce((total, customer) => total + customer.outstandingLaari, 0),
+      availableCreditLaari: metricRows.reduce((total, customer) => total + customer.availableCreditLaari, 0),
+      atLimit: metricRows.filter((customer) => customer.atLimit).length,
+    },
+    pagination: {
+      page,
+      pageSize: bounded ? pageSize : Math.max(1, matchingCustomers),
+      matchingCustomers,
+      pageCount: bounded ? Math.max(1, Math.ceil(matchingCustomers / pageSize)) : 1,
     },
   };
 }

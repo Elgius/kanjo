@@ -52,6 +52,7 @@ export type BillHistoryRow = {
   openedAt: string;
   paidAt: string | null;
   cancelledAt: string | null;
+  paymentSlip: { fileName: string; contentType: string; uploadedAt: string } | null;
   revisions: BillHistoryRevision[];
 };
 
@@ -120,7 +121,15 @@ function queryBills(where: Prisma.BillWhereInput, take: number) {
     where,
     orderBy: [{ openedAt: "desc" }, { id: "desc" }],
     take,
-    include: { revisions: { orderBy: { revision: "asc" } } },
+    include: {
+      paymentLink: { select: {
+        paymentSlipKey: true,
+        paymentSlipFileName: true,
+        paymentSlipContentType: true,
+        paymentSlipUploadedAt: true,
+      } },
+      revisions: { orderBy: { revision: "asc" } },
+    },
   });
 }
 
@@ -157,6 +166,16 @@ function serializeBill(bill: Awaited<ReturnType<typeof queryBills>>[number]): Bi
     openedAt: bill.openedAt.toISOString(),
     paidAt: bill.paidAt?.toISOString() ?? null,
     cancelledAt: bill.cancelledAt?.toISOString() ?? null,
+    paymentSlip: bill.paymentLink?.paymentSlipKey
+      && bill.paymentLink.paymentSlipFileName
+      && bill.paymentLink.paymentSlipContentType
+      && bill.paymentLink.paymentSlipUploadedAt
+      ? {
+          fileName: bill.paymentLink.paymentSlipFileName,
+          contentType: bill.paymentLink.paymentSlipContentType,
+          uploadedAt: bill.paymentLink.paymentSlipUploadedAt.toISOString(),
+        }
+      : null,
     revisions: bill.revisions.map((revision) => ({
       id: revision.id,
       revision: revision.revision,

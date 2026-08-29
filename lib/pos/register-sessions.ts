@@ -21,6 +21,7 @@ export type SessionTransaction = {
   additionalCosts: BillSnapshot["additionalCosts"];
   openedAt: string;
   cashierName: string;
+  paymentSlip: { fileName: string; contentType: string; uploadedAt: string } | null;
   items: Array<BillSnapshot["items"][number] & { saleItemId: string | null; stockTrackedQuantity: number }>;
   revisions: Array<{ id: string; revision: number; kind: BillRevisionKind; actorName: string; changes: string[]; createdAt: string }>;
 };
@@ -131,6 +132,78 @@ export async function getRegisterSessions(registerId: string, authorizedRegister
   };
 }
 
+export async function getRegisterSessionsPage(
+  registerId: string,
+  page = 1,
+  pageSize = 25,
+  authorizedRegisterIds: readonly string[] | null = null,
+) {
+  if (!uuidPattern.test(registerId)) return null;
+  if (authorizedRegisterIds && !authorizedRegisterIds.includes(registerId)) return null;
+  const boundedPage = Math.max(1, Math.floor(page));
+  const boundedPageSize = Math.min(50, Math.max(1, Math.floor(pageSize)));
+  const register = await prisma.cashRegister.findFirst({
+    where: { id: registerId, active: true },
+    select: { id: true, code: true, name: true, purpose: true, _count: { select: { shifts: true } } },
+  });
+  if (!register) return null;
+
+  const shifts = await prisma.registerShift.findMany({
+    where: { registerId },
+    orderBy: { openedAt: "desc" },
+    skip: (boundedPage - 1) * boundedPageSize,
+    take: boundedPageSize,
+    select: {
+      id: true,
+      status: true,
+      openingCashLaari: true,
+      closingCashLaari: true,
+      openedAt: true,
+      closedAt: true,
+      openedBy: { select: { name: true } },
+      closedBy: { select: { name: true } },
+    },
+  });
+  const shiftIds = shifts.map(({ id }) => id);
+  const sales = shiftIds.length
+    ? await prisma.sale.groupBy({
+        by: ["registerShiftId", "status", "paymentMethod"],
+        where: { registerShiftId: { in: shiftIds } },
+        _count: { id: true },
+        _sum: { totalLaari: true },
+      })
+    : [];
+  const totals = new Map<string, { completedSalesLaari: number; cashSalesLaari: number; transactionCount: number; refundedCount: number }>();
+  for (const aggregate of sales) {
+    const current = totals.get(aggregate.registerShiftId) ?? {
+      completedSalesLaari: 0,
+      cashSalesLaari: 0,
+      transactionCount: 0,
+      refundedCount: 0,
+    };
+    if (aggregate.status === "COMPLETED") {
+      current.completedSalesLaari += aggregate._sum.totalLaari ?? 0;
+      current.transactionCount += aggregate._count.id;
+      if (aggregate.paymentMethod === "CASH") current.cashSalesLaari += aggregate._sum.totalLaari ?? 0;
+    } else if (aggregate.status === "REFUNDED") {
+      current.refundedCount += aggregate._count.id;
+    }
+    totals.set(aggregate.registerShiftId, current);
+  }
+
+  return {
+    register: { id: register.id, code: register.code, name: register.name, purpose: register.purpose },
+    sessions: shifts.map((shift) => ({
+      ...shift,
+      ...(totals.get(shift.id) ?? { completedSalesLaari: 0, cashSalesLaari: 0, transactionCount: 0, refundedCount: 0 }),
+    })),
+    page: boundedPage,
+    pageSize: boundedPageSize,
+    totalSessions: register._count.shifts,
+    pageCount: Math.max(1, Math.ceil(register._count.shifts / boundedPageSize)),
+  };
+}
+
 export async function getRegisterSession(registerId: string, sessionId: string, authorizedRegisterIds: readonly string[] | null = null) {
   if (!uuidPattern.test(registerId) || !uuidPattern.test(sessionId)) return null;
   if (authorizedRegisterIds && !authorizedRegisterIds.includes(registerId)) return null;
@@ -193,6 +266,12 @@ export async function getRegisterSession(registerId: string, sessionId: string, 
           restaurantTableName: true,
           openedAt: true,
           openedByName: true,
+          paymentLink: { select: {
+            paymentSlipKey: true,
+            paymentSlipFileName: true,
+            paymentSlipContentType: true,
+            paymentSlipUploadedAt: true,
+          } },
           sale: {
             select: {
               items: {
@@ -254,6 +333,16 @@ export async function getRegisterSession(registerId: string, sessionId: string, 
         additionalCosts: snapshot?.additionalCosts ?? [],
         openedAt: bill.openedAt.toISOString(),
         cashierName: bill.openedByName,
+        paymentSlip: bill.paymentLink?.paymentSlipKey
+          && bill.paymentLink.paymentSlipFileName
+          && bill.paymentLink.paymentSlipContentType
+          && bill.paymentLink.paymentSlipUploadedAt
+          ? {
+              fileName: bill.paymentLink.paymentSlipFileName,
+              contentType: bill.paymentLink.paymentSlipContentType,
+              uploadedAt: bill.paymentLink.paymentSlipUploadedAt.toISOString(),
+            }
+          : null,
         items: bill.sale?.items.length
           ? bill.sale.items.filter((item) => item.quantity > 0).map((item) => ({
               saleItemId: item.id,
