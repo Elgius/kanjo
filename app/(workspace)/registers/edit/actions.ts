@@ -6,8 +6,9 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 import { getAuditRequestContext, safeWriteAudit, writeAudit } from "@/lib/audit";
-import { requireRegisterOperation, type AuthorizationContext } from "@/lib/authorization";
+import { requireRegisterCapability, requireRegisterOperation, type AuthorizationContext } from "@/lib/authorization";
 import { prisma } from "@/lib/db";
+import { parseAdditionalBillCostForm } from "@/lib/pos/additional-bill-costs";
 import { PosError } from "@/lib/pos/sales";
 
 function editRedirect(kind: "success" | "error", message: string): never {
@@ -155,4 +156,84 @@ export async function deleteRegisterAction(registerId: string, formData: FormDat
   }
   refreshRegisterManagement();
   editRedirect("success", "Unused register deleted.");
+}
+
+export async function createAdditionalBillCostAction(formData: FormData) {
+  const registerId = String(formData.get("registerId") ?? "");
+  const authorization = await requireRegisterCapability(
+    "REGISTER_TYPE_CHANGE",
+    registerId,
+    "ADDITIONAL_BILL_COST_CREATE",
+  );
+  const parsed = parseAdditionalBillCostForm(formData);
+  if (!parsed.ok) editRedirect("error", parsed.error);
+  const { name, type, percentageBasisPoints, flatAmountLaari } = parsed.data;
+
+  try {
+    const created = await prisma.additionalBillCost.create({
+      data: {
+        registerId,
+        name,
+        type,
+        percentageBasisPoints,
+        flatAmountLaari,
+      },
+    });
+    await safeWriteAudit({
+      outcome: "SUCCESS",
+      event: "ADDITIONAL_BILL_COST_CREATE",
+      page: "REGISTERS",
+      actorId: authorization.user.id,
+      actorLabel: authorization.user.username ?? authorization.user.email,
+      targetType: "additional_bill_cost",
+      targetId: created.id,
+      summary: `${name} added to the register's available bill costs.`,
+      metadata: { registerId, type, percentageBasisPoints, flatAmountLaari },
+      request: await getAuditRequestContext(),
+    });
+  } catch (error) {
+    const message = error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002"
+      ? "That additional cost name already exists for this register."
+      : "The additional bill cost could not be created.";
+    await failure(authorization, "ADDITIONAL_BILL_COST_CREATE", registerId, message);
+    editRedirect("error", message);
+  }
+
+  refreshRegisterManagement(registerId);
+  editRedirect("success", "Additional bill cost added.");
+}
+
+export async function deleteAdditionalBillCostAction(registerId: string, costId: string) {
+  const authorization = await requireRegisterCapability(
+    "REGISTER_TYPE_CHANGE",
+    registerId,
+    "ADDITIONAL_BILL_COST_DELETE",
+  );
+  try {
+    const cost = await prisma.additionalBillCost.findFirst({
+      where: { id: costId, registerId },
+      select: { id: true, name: true, type: true, percentageBasisPoints: true, flatAmountLaari: true },
+    });
+    if (!cost) throw new PosError("Additional bill cost not found.");
+    await prisma.additionalBillCost.delete({ where: { id: cost.id } });
+    await safeWriteAudit({
+      outcome: "SUCCESS",
+      event: "ADDITIONAL_BILL_COST_DELETE",
+      page: "REGISTERS",
+      actorId: authorization.user.id,
+      actorLabel: authorization.user.username ?? authorization.user.email,
+      targetType: "additional_bill_cost",
+      targetId: cost.id,
+      summary: `${cost.name} removed from the register's available bill costs.`,
+      metadata: { registerId, type: cost.type, percentageBasisPoints: cost.percentageBasisPoints, flatAmountLaari: cost.flatAmountLaari },
+      request: await getAuditRequestContext(),
+    });
+  } catch (error) {
+    const message = error instanceof PosError ? error.message : "The additional bill cost could not be deleted.";
+    await failure(authorization, "ADDITIONAL_BILL_COST_DELETE", registerId, message);
+    editRedirect("error", message);
+  }
+
+  refreshRegisterManagement(registerId);
+  editRedirect("success", "Additional bill cost deleted.");
 }

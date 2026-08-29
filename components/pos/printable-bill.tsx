@@ -4,6 +4,7 @@ import { useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 
 import type { BillStatus, PaymentMethod } from "@/generated/prisma/enums";
+import type { AppliedAdditionalBillCost } from "@/lib/pos/additional-bill-costs";
 import { formatMvr } from "@/lib/pos/money";
 import { cn } from "@/lib/utils";
 
@@ -37,6 +38,7 @@ export type PrintableBillProps = {
   items: PrintableBillItem[];
   subtotalLaari: number;
   totalLaari: number;
+  additionalCosts?: AppliedAdditionalBillCost[];
   paymentMethod: PaymentMethod | null;
   status: BillStatus;
   showIncludedTax?: boolean;
@@ -74,6 +76,7 @@ export function PrintableBill({
   items,
   subtotalLaari,
   totalLaari,
+  additionalCosts = [],
   paymentMethod,
   status,
   showIncludedTax = false,
@@ -103,6 +106,12 @@ export function PrintableBill({
       </div>
       <div className="grid gap-1 py-2">
         <div className="flex justify-between"><span>Subtotal</span><span>{formatMvr(subtotalLaari)}</span></div>
+        {additionalCosts.map((cost) => (
+          <div key={cost.id} className="flex justify-between gap-2">
+            <span>{cost.name}{cost.type === "PERCENTAGE" ? ` (${cost.percentageBasisPoints! / 100}%)` : ""}</span>
+            <span>{formatMvr(cost.amountLaari)}</span>
+          </div>
+        ))}
         {showIncludedTax ? <div className="flex justify-between"><span>Tax</span><span>Included</span></div> : null}
         <div className="flex justify-between text-xs font-bold"><span>TOTAL</span><span>{formatMvr(totalLaari)}</span></div>
         <div className="flex justify-between"><span>Payment</span><span>{paymentLabel(paymentMethod)}</span></div>

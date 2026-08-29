@@ -297,7 +297,7 @@ export async function cancelHeldOrderAction(
       const order = await tx.registerOrder.findFirst({
         where: { id: heldOrderId, registerShiftId: shiftId, status: "HELD" },
         select: { id: true, bill: { select: {
-          id: true, version: true, status: true, items: true, subtotalLaari: true, totalLaari: true,
+          id: true, version: true, status: true, items: true, subtotalLaari: true, totalLaari: true, additionalCosts: true,
           paymentMethod: true, customerNote: true, restaurantTableId: true, restaurantTableName: true,
         } } },
       });
@@ -313,6 +313,7 @@ export async function cancelHeldOrderAction(
           items: order.bill.items,
           subtotalLaari: order.bill.subtotalLaari,
           totalLaari: order.bill.totalLaari,
+          additionalCosts: order.bill.additionalCosts,
           paymentMethod: order.bill.paymentMethod,
           customerNote: order.bill.customerNote,
           restaurantTableId: order.bill.restaurantTableId,

@@ -1,6 +1,8 @@
 import type { PrismaClient } from "@/generated/prisma/client";
 import { auditCreateData, type AuditRequestContext } from "@/lib/audit-core";
-import { describeBillChanges, itemsJson, makeBillSnapshot, parseBillSnapshot, snapshotJson } from "@/lib/pos/bill-revisions";
+import { additionalBillCostsJson, calculateAdditionalBillCosts } from "@/lib/pos/additional-bill-costs";
+import { getRegisterAdditionalBillCostRates } from "@/lib/pos/additional-bill-costs.server";
+import { costsJson, describeBillChanges, itemsJson, makeBillSnapshot, parseBillSnapshot, snapshotJson } from "@/lib/pos/bill-revisions";
 import { PosError } from "@/lib/pos/sales";
 
 type HeldOrderItem = { itemId: string; quantity: number };
@@ -155,14 +157,17 @@ export async function holdRegisterOrder(db: PrismaClient, input: HoldRegisterOrd
       });
     }
 
-    const totalLaari = lines.reduce((total, line) => total + line.lineTotalLaari, 0);
+    const subtotalLaari = lines.reduce((total, line) => total + line.lineTotalLaari, 0);
+    const additionalCostRates = await getRegisterAdditionalBillCostRates(tx, shift.registerId);
+    const calculated = calculateAdditionalBillCosts(subtotalLaari, additionalCostRates);
     const data = {
       createdById: input.createdById,
       customerNote: input.customerNote?.trim().slice(0, 500) || null,
       paymentMethod: input.paymentMethod,
       restaurantTableId,
-      subtotalLaari: totalLaari,
-      totalLaari,
+      subtotalLaari,
+      totalLaari: calculated.totalLaari,
+      additionalCosts: additionalBillCostsJson(calculated.costs),
       heldAt: new Date(),
       items: { create: lines },
     };
@@ -176,7 +181,7 @@ export async function holdRegisterOrder(db: PrismaClient, input: HoldRegisterOrd
           status: "HELD",
         },
         select: { id: true, bill: { select: {
-          id: true, version: true, status: true, items: true, subtotalLaari: true, totalLaari: true,
+          id: true, version: true, status: true, items: true, subtotalLaari: true, totalLaari: true, additionalCosts: true,
           paymentMethod: true, customerNote: true, restaurantTableId: true, restaurantTableName: true,
         } } },
       });
@@ -195,13 +200,14 @@ export async function holdRegisterOrder(db: PrismaClient, input: HoldRegisterOrd
           items: existing.bill.items,
           subtotalLaari: existing.bill.subtotalLaari,
           totalLaari: existing.bill.totalLaari,
+          additionalCosts: existing.bill.additionalCosts,
           paymentMethod: existing.bill.paymentMethod,
           customerNote: existing.bill.customerNote,
           restaurantTableId: existing.bill.restaurantTableId,
           restaurantTableName: existing.bill.restaurantTableName,
         } as never);
         if (!before) throw new PosError("That bill has invalid snapshot data.");
-        const after = makeBillSnapshot(lines, input.paymentMethod ?? existing.bill.paymentMethod, input.customerNote ?? null, restaurantTable);
+        const after = makeBillSnapshot(lines, input.paymentMethod ?? existing.bill.paymentMethod, input.customerNote ?? null, restaurantTable, additionalCostRates);
         const changes = describeBillChanges(before, after);
         if (changes.length) {
           const version = existing.bill.version + 1;
@@ -209,6 +215,7 @@ export async function holdRegisterOrder(db: PrismaClient, input: HoldRegisterOrd
             paymentMethod: after.paymentMethod,
             subtotalLaari: after.subtotalLaari,
             totalLaari: after.totalLaari,
+            additionalCosts: costsJson(after),
             items: itemsJson(after),
             customerNote: after.customerNote,
             restaurantTableId: after.restaurantTableId,
@@ -244,7 +251,7 @@ export async function holdRegisterOrder(db: PrismaClient, input: HoldRegisterOrd
         metadata: {
           registerId: shift.registerId,
           registerShiftId: shift.id,
-          totalLaari,
+          totalLaari: calculated.totalLaari,
           lineCount: lines.length,
           restaurantTableId,
         },

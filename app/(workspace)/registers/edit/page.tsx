@@ -3,26 +3,19 @@ import { ExternalLink, Store, Trash2 } from "lucide-react";
 
 import { PageContainer, PageHeader, Surface } from "@/components/pos/primitives";
 import { authorizedRegisterIds, can, requireCapability } from "@/lib/authorization";
-import { prisma } from "@/lib/db";
+import { formatMvr } from "@/lib/pos/money";
+import { getAdditionalBillCosts, getRegisterAdministrationData } from "@/lib/pos/register-administration";
 import { cn } from "@/lib/utils";
 import {
   changeRegisterTypeAction,
+  deleteAdditionalBillCostAction,
   deleteRegisterAction,
   renameRegisterAction,
   setRegisterActiveAction,
 } from "./actions";
+import { AdditionalBillCostForm } from "./additional-bill-cost-form";
 
 const fieldClass = "h-10 min-w-0 rounded-lg border border-border bg-background px-3 text-xs outline-none focus:border-ring focus:ring-2 focus:ring-ring/15 disabled:cursor-not-allowed disabled:opacity-60";
-
-const dependencyCount = {
-  shifts: true,
-  products: true,
-  menuItems: true,
-  restaurantTables: true,
-  customerCreditBills: true,
-  stockMovements: true,
-  batches: true,
-} as const;
 
 function single(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value;
@@ -38,20 +31,11 @@ export default async function EditRegistersPage({
   const query = await searchParams;
   const success = single(query.success);
   const error = single(query.error);
-  const registers = await prisma.cashRegister.findMany({
-    where: allowedRegisterIds ? { id: { in: allowedRegisterIds } } : undefined,
-    orderBy: [{ active: "desc" }, { name: "asc" }],
-    select: {
-      id: true,
-      code: true,
-      name: true,
-      purpose: true,
-      active: true,
-      updatedAt: true,
-      shifts: { where: { status: "OPEN" }, take: 1, select: { id: true } },
-      _count: { select: dependencyCount },
-    },
-  });
+  const [registers, additionalCosts] = await Promise.all([
+    getRegisterAdministrationData("ALL", allowedRegisterIds),
+    getAdditionalBillCosts(allowedRegisterIds),
+  ]);
+  const canManageAdditionalCosts = can(authorization, "REGISTER_TYPE_CHANGE");
 
   return (
     <PageContainer>
@@ -59,10 +43,63 @@ export default async function EditRegistersPage({
         eyebrow="Registers / Edit"
         title="Manage registers"
         description="Rename registers, manage their type and availability, or delete registers that were never used."
-        actions={<Link href="/registers" prefetch={false} className="flex h-10 items-center rounded-lg border border-border bg-card px-4 text-xs font-semibold">Register selection</Link>}
+        actions={
+          <>
+            <Link
+              href="#additional-bill-costs"
+              className="flex h-10 items-center rounded-lg bg-primary px-4 text-xs font-semibold text-primary-foreground"
+            >
+              Additional bill costs
+            </Link>
+            <Link href="/registers" prefetch={false} className="flex h-10 items-center rounded-lg border border-border bg-card px-4 text-xs font-semibold">Register selection</Link>
+          </>
+        }
       />
 
       {success || error ? <p role={error ? "alert" : "status"} className={cn("rounded-lg border px-4 py-3 text-xs", error ? "border-destructive/30 bg-destructive/10 text-destructive" : "border-chart-1/30 bg-chart-1/10")}>{error ?? success}</p> : null}
+
+      <div id="additional-bill-costs" className="scroll-mt-6">
+        <Surface className="overflow-hidden">
+          <header className="flex flex-col justify-between gap-2 px-5 py-5 sm:flex-row sm:items-end sm:px-6">
+            <div>
+              <h2 className="text-sm font-semibold">Additional bill costs</h2>
+              <p className="mt-1 text-[11px] text-muted-foreground">Create percentage charges such as 6% GST or flat charges such as an MVR 10 plastic bag.</p>
+            </div>
+            <span className="text-[11px] text-muted-foreground">{additionalCosts.length} configured</span>
+          </header>
+
+          {canManageAdditionalCosts && registers.length ? <AdditionalBillCostForm registers={registers} /> : null}
+
+          {additionalCosts.length ? (
+            <div className="divide-y divide-border border-t border-border">
+              {additionalCosts.map((cost) => (
+                <div key={cost.id} className="flex flex-col justify-between gap-3 px-5 py-4 sm:flex-row sm:items-center sm:px-6">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="text-xs font-semibold">{cost.name}</h3>
+                      <span className="rounded-full bg-chart-1/10 px-2 py-1 text-[9px] font-semibold text-chart-1">
+                        {cost.type === "PERCENTAGE"
+                          ? `${cost.percentageBasisPoints! / 100}%`
+                          : formatMvr(cost.flatAmountLaari!)}
+                      </span>
+                    </div>
+                    <p className="mt-1 font-mono text-[10px] text-muted-foreground">{cost.register.name} · {cost.register.code} · {cost.type === "PERCENTAGE" ? "Percentage" : "Flat rate"}</p>
+                  </div>
+                  {canManageAdditionalCosts ? (
+                    <form action={deleteAdditionalBillCostAction.bind(null, cost.registerId, cost.id)}>
+                      <button type="submit" className="flex h-9 w-fit items-center gap-1.5 rounded-lg border border-destructive/25 px-3 text-[11px] font-semibold text-destructive">
+                        <Trash2 className="size-3.5" aria-hidden="true" />Remove
+                      </button>
+                    </form>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="border-t border-border px-5 py-6 text-xs text-muted-foreground sm:px-6">No additional bill costs have been configured.</p>
+          )}
+        </Surface>
+      </div>
 
       <Surface className="overflow-hidden">
         <header className="flex flex-col justify-between gap-2 border-b border-border px-5 py-5 sm:flex-row sm:items-end sm:px-6">
@@ -71,10 +108,9 @@ export default async function EditRegistersPage({
         </header>
 
         {registers.length ? <div className="divide-y divide-border">{registers.map((register) => {
-          const hasOpenShift = register.shifts.length > 0;
-          const usageCount = Object.values(register._count).reduce((total, count) => total + count, 0);
-          const canChangePurpose = usageCount === 0;
-          const canDelete = usageCount === 0;
+          const hasOpenShift = register.hasOpenShift;
+          const canChangePurpose = register.canChangePurpose;
+          const canDelete = register.canDelete;
           return (
             <article key={register.id} className="grid gap-5 px-5 py-6 sm:px-6">
               <header className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">

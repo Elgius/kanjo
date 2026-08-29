@@ -5,12 +5,14 @@ import { useRouter } from "next/navigation";
 
 import { printBill, PrintableBill, PrintableBillPortal, type PrintableBillProps } from "@/components/pos/printable-bill";
 import type { BillStatus } from "@/generated/prisma/enums";
+import type { AppliedAdditionalBillCost } from "@/lib/pos/additional-bill-costs";
 
 export type PrintableReceipt = {
   id: string;
   receiptNumber: string;
   subtotalLaari: number;
   totalLaari: number;
+  additionalCosts: AppliedAdditionalBillCost[];
   paymentMethod: "CASH" | "CARD" | "MOBILE";
   createdAt: string;
   createdBy: { name: string };
@@ -64,6 +66,7 @@ export function ReceiptPrintDialog({
     items: receipt.items.map((item) => ({ key: item.id, name: item.productName, sku: item.productSku, quantity: item.quantity, unitPriceLaari: item.unitPriceLaari, lineTotalLaari: item.lineTotalLaari })),
     subtotalLaari: receipt.subtotalLaari,
     totalLaari: receipt.totalLaari,
+    additionalCosts: receipt.additionalCosts,
     paymentMethod: receipt.paymentMethod,
     status: receipt.bill?.status ?? "PAID",
   } satisfies PrintableBillProps;

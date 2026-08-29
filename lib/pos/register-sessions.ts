@@ -18,6 +18,7 @@ export type SessionTransaction = {
   paymentMethod: PaymentMethod;
   subtotalLaari: number;
   totalLaari: number;
+  additionalCosts: BillSnapshot["additionalCosts"];
   openedAt: string;
   cashierName: string;
   items: Array<BillSnapshot["items"][number] & { saleItemId: string | null; stockTrackedQuantity: number }>;
@@ -155,6 +156,7 @@ export async function getRegisterSession(registerId: string, sessionId: string, 
           paymentMethod: true,
           subtotalLaari: true,
           totalLaari: true,
+          additionalCosts: true,
           createdAt: true,
           createdBy: { select: { name: true } },
           bill: { select: { id: true } },
@@ -184,6 +186,7 @@ export async function getRegisterSession(registerId: string, sessionId: string, 
           paymentMethod: true,
           subtotalLaari: true,
           totalLaari: true,
+          additionalCosts: true,
           items: true,
           customerNote: true,
           restaurantTableId: true,
@@ -232,6 +235,7 @@ export async function getRegisterSession(registerId: string, sessionId: string, 
         items: bill.items,
         subtotalLaari: bill.subtotalLaari,
         totalLaari: bill.totalLaari,
+        additionalCosts: bill.additionalCosts,
         paymentMethod: bill.paymentMethod,
         customerNote: bill.customerNote,
         restaurantTableId: bill.restaurantTableId,
@@ -247,6 +251,7 @@ export async function getRegisterSession(registerId: string, sessionId: string, 
         paymentMethod: bill.paymentMethod,
         subtotalLaari: bill.subtotalLaari,
         totalLaari: bill.totalLaari,
+        additionalCosts: snapshot?.additionalCosts ?? [],
         openedAt: bill.openedAt.toISOString(),
         cashierName: bill.openedByName,
         items: bill.sale?.items.length
