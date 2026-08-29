@@ -248,6 +248,11 @@ enum RegisterPurpose {
   RESTAURANT
 }
 
+enum AdditionalBillCostType {
+  PERCENTAGE
+  FLAT_RATE
+}
+
 enum CustomerCreditStatus {
   OUTSTANDING
   PAID
@@ -321,9 +326,26 @@ model CashRegister {
   customerCreditBills CustomerCreditBill[]
   batches             InventoryBatch[]
   roleAccess          RoleRegisterAccess[]
+  additionalBillCosts AdditionalBillCost[]
 
   @@index([active, name])
   @@map("cash_registers")
+}
+
+model AdditionalBillCost {
+  id                    String                 @id @default(uuid()) @db.Uuid
+  registerId            String                 @db.Uuid
+  name                  String
+  type                  AdditionalBillCostType
+  percentageBasisPoints Int?
+  flatAmountLaari       Int?
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+  register              CashRegister           @relation(fields: [registerId], references: [id], onDelete: Cascade)
+
+  @@unique([registerId, name])
+  @@index([registerId, type, name])
+  @@map("additional_bill_costs")
 }
 
 model RestaurantTable {
@@ -445,6 +467,7 @@ model Sale {
   paymentMethod      PaymentMethod
   subtotalLaari      Int
   totalLaari         Int
+  additionalCosts    Json                @default("[]")
   createdAt          DateTime            @default(now())
   refundedAt         DateTime?
   registerShift      RegisterShift       @relation(fields: [registerShiftId], references: [id], onDelete: Restrict)
@@ -482,6 +505,7 @@ model Bill {
   paymentMethod        PaymentMethod
   subtotalLaari        Int
   totalLaari           Int
+  additionalCosts      Json               @default("[]")
   items                Json
   customerNote         String?
   restaurantTableId    String?            @db.Uuid
@@ -537,6 +561,7 @@ model CustomerCreditBill {
   status         CustomerCreditStatus @default(OUTSTANDING)
   subtotalLaari  Int
   totalLaari     Int
+  additionalCosts Json                @default("[]")
   items          Json
   note           String?
   issuedAt       DateTime             @default(now())
@@ -609,6 +634,7 @@ model RegisterOrder {
   paymentMethod     PaymentMethod?
   subtotalLaari     Int
   totalLaari        Int
+  additionalCosts   Json                @default("[]")
   heldAt            DateTime            @default(now())
   completedAt       DateTime?
   cancelledAt       DateTime?

@@ -2,6 +2,7 @@ import { Prisma, type PrismaClient } from "@/generated/prisma/client";
 import type { BillStatus, PaymentMethod } from "@/generated/prisma/enums";
 import { auditCreateData, type AuditRequestContext } from "@/lib/audit-core";
 import {
+  costsJson,
   describeBillChanges,
   eventChanges,
   itemsJson,
@@ -9,6 +10,7 @@ import {
   parseBillSnapshot,
   snapshotJson,
 } from "@/lib/pos/bill-revisions";
+import { getRegisterAdditionalBillCostRates } from "@/lib/pos/additional-bill-costs.server";
 import {
   maldivesDate,
   measured,
@@ -310,6 +312,7 @@ export async function recordSale(db: PrismaClient, input: RecordSaleInput) {
         items: Prisma.JsonValue;
         subtotalLaari: number;
         totalLaari: number;
+        additionalCosts: Prisma.JsonValue;
         paymentMethod: PaymentMethod;
         customerNote: string | null;
         restaurantTableId: string | null;
@@ -329,7 +332,7 @@ export async function recordSale(db: PrismaClient, input: RecordSaleInput) {
           restaurantTableId: true,
           restaurantTable: { select: { id: true, name: true } },
           bill: { select: {
-            id: true, version: true, status: true, items: true, subtotalLaari: true, totalLaari: true,
+            id: true, version: true, status: true, items: true, subtotalLaari: true, totalLaari: true, additionalCosts: true,
             paymentMethod: true, customerNote: true, restaurantTableId: true, restaurantTableName: true,
           } },
         },
@@ -342,14 +345,31 @@ export async function recordSale(db: PrismaClient, input: RecordSaleInput) {
     const deductions = await deductRequirements(tx, requirements, shift.register.purpose === "SHOP");
     const persistedLines: PersistedSaleLine[] = lines.map((line) => ({ ...line, id: crypto.randomUUID() }));
     const allocations = allocateDeductionsToLines(persistedLines, deductions);
-    const totalLaari = lines.reduce((total, line) => total + line.lineTotalLaari, 0);
+    const payerName = input.cashierName ?? input.audit.actorLabel;
+    const [finalTable, additionalCostRates] = await Promise.all([
+      input.restaurantTableId
+        ? tx.restaurantTable.findFirst({
+            where: { id: input.restaurantTableId, registerId: shift.registerId, active: true },
+            select: { id: true, name: true },
+          })
+        : Promise.resolve(heldOrder?.restaurantTable ?? null),
+      getRegisterAdditionalBillCostRates(tx, shift.registerId),
+    ]);
+    const finalSnapshot = makeBillSnapshot(
+      persistedLines,
+      input.paymentMethod,
+      input.customerNote ?? heldOrder?.customerNote ?? null,
+      finalTable,
+      additionalCostRates,
+    );
     const sale = await tx.sale.create({
       data: {
         registerShiftId: input.shiftId,
         createdById: input.createdById,
         paymentMethod: input.paymentMethod,
-        subtotalLaari: totalLaari,
-        totalLaari,
+        subtotalLaari: finalSnapshot.subtotalLaari,
+        totalLaari: finalSnapshot.totalLaari,
+        additionalCosts: costsJson(finalSnapshot),
         items: {
           create: persistedLines.map(saleItemCreateData),
         },
@@ -364,19 +384,6 @@ export async function recordSale(db: PrismaClient, input: RecordSaleInput) {
       }))),
     });
 
-    const payerName = input.cashierName ?? input.audit.actorLabel;
-    const finalTable = input.restaurantTableId
-      ? await tx.restaurantTable.findFirst({
-          where: { id: input.restaurantTableId, registerId: shift.registerId, active: true },
-          select: { id: true, name: true },
-        })
-      : heldOrder?.restaurantTable ?? null;
-    const finalSnapshot = makeBillSnapshot(
-      persistedLines,
-      input.paymentMethod,
-      input.customerNote ?? heldOrder?.customerNote ?? null,
-      finalTable,
-    );
     let billNumber: bigint;
     if (heldOrder?.bill) {
       if (heldOrder.bill.status !== "UNPAID") throw new PosError("That bill is no longer unpaid.");
@@ -384,6 +391,7 @@ export async function recordSale(db: PrismaClient, input: RecordSaleInput) {
         items: heldOrder.bill.items,
         subtotalLaari: heldOrder.bill.subtotalLaari,
         totalLaari: heldOrder.bill.totalLaari,
+        additionalCosts: heldOrder.bill.additionalCosts,
         paymentMethod: heldOrder.bill.paymentMethod,
         customerNote: heldOrder.bill.customerNote,
         restaurantTableId: heldOrder.bill.restaurantTableId,
@@ -413,6 +421,7 @@ export async function recordSale(db: PrismaClient, input: RecordSaleInput) {
           paymentMethod: input.paymentMethod,
           subtotalLaari: finalSnapshot.subtotalLaari,
           totalLaari: finalSnapshot.totalLaari,
+          additionalCosts: costsJson(finalSnapshot),
           items: itemsJson(finalSnapshot),
           customerNote: finalSnapshot.customerNote,
           restaurantTableId: finalSnapshot.restaurantTableId,
@@ -451,6 +460,7 @@ export async function recordSale(db: PrismaClient, input: RecordSaleInput) {
           paymentMethod: input.paymentMethod,
           subtotalLaari: finalSnapshot.subtotalLaari,
           totalLaari: finalSnapshot.totalLaari,
+          additionalCosts: costsJson(finalSnapshot),
           items: itemsJson(finalSnapshot),
           customerNote: finalSnapshot.customerNote,
           restaurantTableId: finalSnapshot.restaurantTableId,
@@ -484,6 +494,9 @@ export async function recordSale(db: PrismaClient, input: RecordSaleInput) {
           completedAt: new Date(),
           paymentMethod: input.paymentMethod,
           saleId: sale.id,
+          subtotalLaari: finalSnapshot.subtotalLaari,
+          totalLaari: finalSnapshot.totalLaari,
+          additionalCosts: costsJson(finalSnapshot),
         },
       });
       if (completed.count !== 1) throw new PosError("That held order changed. Try again.");

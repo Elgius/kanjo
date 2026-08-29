@@ -161,6 +161,7 @@ export default async function RegisterManagementPage({
             isRestaurant={register.purpose === "RESTAURANT"}
             restaurantTables={data.restaurantTables}
             creditCustomers={data.creditCustomers}
+            additionalBillCosts={data.additionalBillCosts}
             heldOrders={data.heldOrders.map((order) => ({
               ...order,
               heldAt: order.heldAt.toISOString(),

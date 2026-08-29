@@ -5,6 +5,8 @@ import type { PaymentMethod } from "@/generated/prisma/enums";
 import { auditCreateData, type AuditRequestContext } from "@/lib/audit-core";
 import { eventChanges, snapshotJson, type BillSnapshot } from "@/lib/pos/bill-revisions";
 import { prisma } from "@/lib/db";
+import { additionalBillCostsJson, calculateAdditionalBillCosts, parseAppliedAdditionalBillCosts } from "@/lib/pos/additional-bill-costs";
+import { getRegisterAdditionalBillCostRates } from "@/lib/pos/additional-bill-costs.server";
 import { measured } from "@/lib/pos/inventory";
 import {
   allocateDeductionsToLines,
@@ -104,7 +106,7 @@ export async function issueCustomerCredit(
     if (!shift) throw new PosError("The selected register does not have an open shift.");
     if (!customer) throw new PosError("Select an active customer for this credit bill.");
 
-    const [{ lines, requirements }, outstanding, trackedOrder] = await Promise.all([
+    const [{ lines, requirements }, outstanding, trackedOrder, additionalCostRates] = await Promise.all([
       prepareSaleInventory(tx, shift, input.items),
       tx.customerCreditBill.aggregate({
         where: { customerId: customer.id, status: "OUTSTANDING" },
@@ -116,14 +118,17 @@ export async function issueCustomerCredit(
             select: { id: true, bill: { select: {
               id: true, version: true, status: true, paymentMethod: true, customerNote: true,
               restaurantTableId: true, restaurantTableName: true, items: true,
-              subtotalLaari: true, totalLaari: true,
+              subtotalLaari: true, totalLaari: true, additionalCosts: true,
             } } },
           })
         : Promise.resolve(null),
+      getRegisterAdditionalBillCostRates(tx, shift.registerId),
     ]);
     if (input.heldOrderId && !trackedOrder) throw new PosError("That held bill is no longer available.");
     const persistedLines: PersistedSaleLine[] = lines.map((line) => ({ ...line, id: crypto.randomUUID() }));
-    const totalLaari = lines.reduce((total, line) => total + line.lineTotalLaari, 0);
+    const subtotalLaari = lines.reduce((total, line) => total + line.lineTotalLaari, 0);
+    const calculated = calculateAdditionalBillCosts(subtotalLaari, additionalCostRates);
+    const totalLaari = calculated.totalLaari;
     const outstandingLaari = outstanding._sum.totalLaari ?? 0;
     if (outstandingLaari + totalLaari > customer.creditLimitLaari) {
       throw new PosError(`${customer.name} does not have enough available credit for this bill.`);
@@ -140,8 +145,9 @@ export async function issueCustomerCredit(
         registerId: shift.registerId,
         issuedShiftId: shift.id,
         createdById: input.createdById,
-        subtotalLaari: totalLaari,
+        subtotalLaari,
         totalLaari,
+        additionalCosts: additionalBillCostsJson(calculated.costs),
         items: snapshotItems(persistedLines),
         note: input.note?.trim().slice(0, 500) || null,
       },
@@ -202,6 +208,7 @@ export async function issueCustomerCredit(
         items: trackedOrder.bill.items,
         subtotalLaari: trackedOrder.bill.subtotalLaari,
         totalLaari: trackedOrder.bill.totalLaari,
+        additionalCosts: parseAppliedAdditionalBillCosts(trackedOrder.bill.additionalCosts),
         paymentMethod: trackedOrder.bill.paymentMethod,
         customerNote: trackedOrder.bill.customerNote,
         restaurantTableId: trackedOrder.bill.restaurantTableId,
@@ -270,6 +277,7 @@ export async function settleCustomerCredit(
         registerId: true,
         subtotalLaari: true,
         totalLaari: true,
+        additionalCosts: true,
         items: true,
         customer: { select: { name: true } },
         register: { select: { name: true, code: true } },
@@ -296,6 +304,7 @@ export async function settleCustomerCredit(
         paymentMethod: input.paymentMethod,
         subtotalLaari: creditBill.subtotalLaari,
         totalLaari: creditBill.totalLaari,
+        additionalCosts: additionalBillCostsJson(parseAppliedAdditionalBillCosts(creditBill.additionalCosts)),
         items: {
           create: items.map(saleItemCreateData),
         },
@@ -333,6 +342,7 @@ export async function settleCustomerCredit(
       })),
       subtotalLaari: creditBill.subtotalLaari,
       totalLaari: creditBill.totalLaari,
+      additionalCosts: parseAppliedAdditionalBillCosts(creditBill.additionalCosts),
       paymentMethod: input.paymentMethod,
       customerNote: creditBill.bill?.customerNote ?? null,
       restaurantTableId: creditBill.bill?.restaurantTableId ?? null,
@@ -353,6 +363,7 @@ export async function settleCustomerCredit(
           paymentMethod: input.paymentMethod,
           subtotalLaari: creditBill.subtotalLaari,
           totalLaari: creditBill.totalLaari,
+          additionalCosts: additionalBillCostsJson(paidSnapshot.additionalCosts),
           items: snapshotItems(items),
           paidAt: sale.createdAt,
           soldAt: sale.createdAt,
@@ -386,6 +397,7 @@ export async function settleCustomerCredit(
           paymentMethod: input.paymentMethod,
           subtotalLaari: creditBill.subtotalLaari,
           totalLaari: creditBill.totalLaari,
+          additionalCosts: additionalBillCostsJson(paidSnapshot.additionalCosts),
           items: snapshotItems(items),
           openedAt: sale.createdAt,
           paidAt: sale.createdAt,
@@ -530,6 +542,7 @@ export async function getCustomerDetail(
           status: true,
           subtotalLaari: true,
           totalLaari: true,
+          additionalCosts: true,
           items: true,
           note: true,
           issuedAt: true,
@@ -560,6 +573,7 @@ export async function getCustomerDetail(
   const bills = customer.creditBills.map((bill) => ({
     ...bill,
     items: parseCreditBillItems(bill.items),
+    additionalCosts: parseAppliedAdditionalBillCosts(bill.additionalCosts),
     receiptNumber: bill.sale?.receiptNumber.toString() ?? null,
   }));
   const outstandingLaari = outstanding._sum.totalLaari ?? 0;

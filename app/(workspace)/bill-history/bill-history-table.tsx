@@ -46,6 +46,7 @@ function BillDialog({ bill, onClose }: { bill: BillHistoryRow; onClose: () => vo
     items: bill.items.map((item, index) => ({ key: `${item.productId ?? item.menuItemId ?? item.productName}:${index}`, name: item.productName, sku: item.productSku, quantity: item.quantity, unitPriceLaari: item.unitPriceLaari, lineTotalLaari: item.lineTotalLaari })),
     subtotalLaari: bill.subtotalLaari,
     totalLaari: bill.totalLaari,
+    additionalCosts: bill.additionalCosts,
     paymentMethod: bill.status === "UNPAID" || bill.status === "CANCELLED" ? null : bill.paymentMethod,
     status: bill.status,
   } satisfies PrintableBillProps;
@@ -79,7 +80,7 @@ function BillDialog({ bill, onClose }: { bill: BillHistoryRow; onClose: () => vo
                     <div className="flex items-start justify-between gap-3"><div><p className="text-[11px] font-semibold">{revisionLabel(revision.kind)}</p><p className="mt-0.5 text-[10px] text-muted-foreground">{revision.actorName} · {formatDateTime(revision.createdAt)}</p></div><span className="font-mono text-[9px] text-muted-foreground">REV {revision.revision}</span></div>
                     <ul className="mt-2 grid gap-1 text-[10px] text-muted-foreground">{revision.changes.map((change, index) => <li key={index}>• {change}</li>)}</ul>
                   </summary>
-                  {revision.snapshot ? <div className="mt-3 border-t border-border pt-3 text-[10px]">{revision.snapshot.items.map((item, index) => <p key={`${item.productName}:${index}`} className="flex justify-between gap-3"><span>{item.productName} × {item.quantity}</span><span>{formatMvr(item.lineTotalLaari)}</span></p>)}<p className="mt-2 flex justify-between border-t border-dashed border-border pt-2 font-semibold"><span>Total</span><span>{formatMvr(revision.snapshot.totalLaari)}</span></p></div> : null}
+                  {revision.snapshot ? <div className="mt-3 border-t border-border pt-3 text-[10px]">{revision.snapshot.items.map((item, index) => <p key={`${item.productName}:${index}`} className="flex justify-between gap-3"><span>{item.productName} × {item.quantity}</span><span>{formatMvr(item.lineTotalLaari)}</span></p>)}{revision.snapshot.additionalCosts.map((cost) => <p key={cost.id} className="mt-1 flex justify-between gap-3 text-muted-foreground"><span>{cost.name}</span><span>{formatMvr(cost.amountLaari)}</span></p>)}<p className="mt-2 flex justify-between border-t border-dashed border-border pt-2 font-semibold"><span>Total</span><span>{formatMvr(revision.snapshot.totalLaari)}</span></p></div> : null}
                 </details>
               ))}
             </div>

@@ -1,7 +1,8 @@
 import { Prisma, type PrismaClient } from "@/generated/prisma/client";
 import type { AuditRequestContext } from "@/lib/audit-core";
 import { auditCreateData } from "@/lib/audit-core";
-import { itemsJson, makeBillSnapshot, snapshotJson } from "@/lib/pos/bill-revisions";
+import { parseAppliedAdditionalBillCosts } from "@/lib/pos/additional-bill-costs";
+import { costsJson, itemsJson, makeBillSnapshot, snapshotJson } from "@/lib/pos/bill-revisions";
 import { measured, measuredPerServing, measuredPerStockUnit, quantityNumber } from "@/lib/pos/inventory";
 import {
   allocateDeductionsToLines,
@@ -408,16 +409,16 @@ export async function amendPaidBill(db: PrismaClient, input: AmendPaidBillInput)
       await tx.saleItem.update({ where: { id: item.id }, data: { quantity, lineTotalLaari: quantity * item.unitPriceLaari } });
     }
     const currentItems = bill.sale.items.map((item) => ({ ...item, quantity: nextQuantities.get(item.id)!, lineTotalLaari: nextQuantities.get(item.id)! * item.unitPriceLaari })).filter((item) => item.quantity > 0);
-    const snapshot = makeBillSnapshot(currentItems, bill.paymentMethod, bill.customerNote, bill.restaurantTableId && bill.restaurantTableName ? { id: bill.restaurantTableId, name: bill.restaurantTableName } : null);
-    await tx.sale.update({ where: { id: bill.sale.id }, data: { subtotalLaari: snapshot.totalLaari, totalLaari: snapshot.totalLaari } });
+    const snapshot = makeBillSnapshot(currentItems, bill.paymentMethod, bill.customerNote, bill.restaurantTableId && bill.restaurantTableName ? { id: bill.restaurantTableId, name: bill.restaurantTableName } : null, parseAppliedAdditionalBillCosts(bill.additionalCosts));
+    await tx.sale.update({ where: { id: bill.sale.id }, data: { subtotalLaari: snapshot.subtotalLaari, totalLaari: snapshot.totalLaari, additionalCosts: costsJson(snapshot) } });
     const updated = await tx.bill.updateMany({
       where: { id: bill.id, version: input.expectedVersion, status: { in: ["PAID", "AMENDED"] } },
-      data: { status: "AMENDED", subtotalLaari: snapshot.totalLaari, totalLaari: snapshot.totalLaari, items: itemsJson(snapshot), version: { increment: 1 } },
+      data: { status: "AMENDED", subtotalLaari: snapshot.subtotalLaari, totalLaari: snapshot.totalLaari, additionalCosts: costsJson(snapshot), items: itemsJson(snapshot), version: { increment: 1 } },
     });
     if (updated.count !== 1) throw new PosError("This bill changed. Reload it before amending.");
     if (bill.customerCreditBillId) await tx.customerCreditBill.update({
       where: { id: bill.customerCreditBillId },
-      data: { subtotalLaari: snapshot.totalLaari, totalLaari: snapshot.totalLaari, items: currentItems.map((item) => ({
+      data: { subtotalLaari: snapshot.subtotalLaari, totalLaari: snapshot.totalLaari, additionalCosts: costsJson(snapshot), items: currentItems.map((item) => ({
         id: item.id, productId: item.productId, menuItemId: item.menuItemId, productName: item.productName,
         productSku: item.productSku, itemCategory: item.itemCategory, quantity: item.quantity,
         unitPriceLaari: item.unitPriceLaari, lineTotalLaari: item.lineTotalLaari,
@@ -471,7 +472,7 @@ export async function reversePaidBill(db: PrismaClient, input: ReversePaidBillIn
     });
     if (updated.count !== 1) throw new PosError("This bill changed. Reload it before reversing.");
     if (bill.customerCreditBillId) await tx.customerCreditBill.update({ where: { id: bill.customerCreditBillId }, data: { status: "REVERSED" } });
-    const snapshot = makeBillSnapshot(bill.sale.items.filter((item) => item.quantity > 0), bill.paymentMethod, bill.customerNote, bill.restaurantTableId && bill.restaurantTableName ? { id: bill.restaurantTableId, name: bill.restaurantTableName } : null);
+    const snapshot = makeBillSnapshot(bill.sale.items.filter((item) => item.quantity > 0), bill.paymentMethod, bill.customerNote, bill.restaurantTableId && bill.restaurantTableName ? { id: bill.restaurantTableId, name: bill.restaurantTableName } : null, parseAppliedAdditionalBillCosts(bill.additionalCosts));
     const metadata = {
       previousTotalLaari: bill.totalLaari,
       currentTotalLaari: 0,

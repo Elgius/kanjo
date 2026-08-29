@@ -1,5 +1,12 @@
 import { Prisma } from "@/generated/prisma/client";
 import type { BillRevisionKind, PaymentMethod } from "@/generated/prisma/enums";
+import {
+  additionalBillCostsJson,
+  calculateAdditionalBillCosts,
+  parseAppliedAdditionalBillCosts,
+  type AdditionalBillCostRate,
+  type AppliedAdditionalBillCost,
+} from "@/lib/pos/additional-bill-costs";
 
 export type BillSnapshotItem = {
   productId: string | null;
@@ -16,6 +23,7 @@ export type BillSnapshot = {
   items: BillSnapshotItem[];
   subtotalLaari: number;
   totalLaari: number;
+  additionalCosts: AppliedAdditionalBillCost[];
   paymentMethod: PaymentMethod;
   customerNote: string | null;
   restaurantTableId: string | null;
@@ -32,8 +40,10 @@ export function makeBillSnapshot(
   paymentMethod: PaymentMethod,
   customerNote: string | null,
   restaurantTable: { id: string; name: string } | null,
+  additionalCostRates: readonly AdditionalBillCostRate[] = [],
 ): BillSnapshot {
-  const totalLaari = lines.reduce((total, line) => total + line.lineTotalLaari, 0);
+  const subtotalLaari = lines.reduce((total, line) => total + line.lineTotalLaari, 0);
+  const calculated = calculateAdditionalBillCosts(subtotalLaari, additionalCostRates);
   return {
     items: lines.map((line) => ({
       productId: line.productId ?? null,
@@ -45,8 +55,9 @@ export function makeBillSnapshot(
       unitPriceLaari: line.unitPriceLaari,
       lineTotalLaari: line.lineTotalLaari,
     })),
-    subtotalLaari: totalLaari,
-    totalLaari,
+    subtotalLaari,
+    totalLaari: calculated.totalLaari,
+    additionalCosts: calculated.costs,
     paymentMethod,
     customerNote: customerNote?.trim().slice(0, 500) || null,
     restaurantTableId: restaurantTable?.id ?? null,
@@ -89,6 +100,7 @@ export function parseBillSnapshot(value: Prisma.JsonValue): BillSnapshot | null 
     items,
     subtotalLaari: snapshot.subtotalLaari,
     totalLaari: snapshot.totalLaari,
+    additionalCosts: parseAppliedAdditionalBillCosts(snapshot.additionalCosts),
     paymentMethod: snapshot.paymentMethod as PaymentMethod,
     customerNote: typeof snapshot.customerNote === "string" ? snapshot.customerNote : null,
     restaurantTableId: typeof snapshot.restaurantTableId === "string" ? snapshot.restaurantTableId : null,
@@ -130,6 +142,9 @@ export function describeBillChanges(before: BillSnapshot, after: BillSnapshot): 
     changes.push(`Table ${before.restaurantTableName ?? "Unassigned"} → ${after.restaurantTableName ?? "Unassigned"}.`);
   }
   if (before.customerNote !== after.customerNote) changes.push("Customer note changed.");
+  if (JSON.stringify(before.additionalCosts) !== JSON.stringify(after.additionalCosts)) {
+    changes.push("Additional bill costs changed.");
+  }
   return changes;
 }
 
@@ -139,6 +154,10 @@ export function snapshotJson(snapshot: BillSnapshot): Prisma.InputJsonValue {
 
 export function itemsJson(snapshot: BillSnapshot): Prisma.InputJsonValue {
   return snapshot.items as unknown as Prisma.InputJsonValue;
+}
+
+export function costsJson(snapshot: BillSnapshot): Prisma.InputJsonValue {
+  return additionalBillCostsJson(snapshot.additionalCosts);
 }
 
 export function eventChanges(kind: BillRevisionKind, snapshot: BillSnapshot, changes: string[] = []) {

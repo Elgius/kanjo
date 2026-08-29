@@ -45,4 +45,17 @@ describe("bill revision snapshots", () => {
     expect(JSON.stringify(describeBillChanges(snapshot, snapshot))).toBe("[]");
     expect(JSON.stringify(parseBillSnapshot(snapshotJson(snapshot) as never))).toBe(JSON.stringify(snapshot));
   });
+
+  test("snapshots additional costs and includes them in the bill total", () => {
+    const snapshot = makeBillSnapshot([coffee], "CASH", null, null, [
+      { id: "gst", name: "GST", type: "PERCENTAGE", percentageBasisPoints: 600, flatAmountLaari: null },
+      { id: "bag", name: "Plastic bag", type: "FLAT_RATE", percentageBasisPoints: null, flatAmountLaari: 1_000 },
+    ]);
+
+    expect(snapshot.subtotalLaari).toBe(1_500);
+    expect(snapshot.additionalCosts[0]?.amountLaari).toBe(90);
+    expect(snapshot.additionalCosts[1]?.amountLaari).toBe(1_000);
+    expect(snapshot.totalLaari).toBe(2_590);
+    expect(JSON.stringify(parseBillSnapshot(snapshotJson(snapshot) as never))).toBe(JSON.stringify(snapshot));
+  });
 });

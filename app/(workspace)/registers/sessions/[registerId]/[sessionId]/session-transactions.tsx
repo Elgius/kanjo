@@ -89,6 +89,7 @@ function TransactionDialog({
           </div>
           <div className="grid gap-2 border-t border-dashed border-border pt-3 text-xs">
             <div className="flex justify-between text-muted-foreground"><span>Subtotal</span><span>{formatMvr(transaction.subtotalLaari)}</span></div>
+            {transaction.additionalCosts.map((cost) => <div key={cost.id} className="flex justify-between text-muted-foreground"><span>{cost.name}{cost.type === "PERCENTAGE" ? ` · ${cost.percentageBasisPoints! / 100}%` : ""}</span><span>{formatMvr(cost.amountLaari)}</span></div>)}
             <div className="flex justify-between text-sm font-bold"><span>Total</span><span>{formatMvr(transaction.totalLaari)}</span></div>
             <div className="flex justify-between text-muted-foreground"><span>Payment</span><span>{transaction.status !== "UNPAID" && transaction.status !== "CANCELLED" ? paymentLabel(transaction.paymentMethod) : "Pending"}</span></div>
           </div>

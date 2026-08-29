@@ -45,6 +45,7 @@ export type BillHistoryRow = {
   paymentMethod: PaymentMethod;
   subtotalLaari: number;
   totalLaari: number;
+  additionalCosts: BillSnapshot["additionalCosts"];
   items: BillSnapshot["items"];
   customerNote: string | null;
   restaurantTableName: string | null;
@@ -128,6 +129,7 @@ function serializeBill(bill: Awaited<ReturnType<typeof queryBills>>[number]): Bi
     items: bill.items,
     subtotalLaari: bill.subtotalLaari,
     totalLaari: bill.totalLaari,
+    additionalCosts: bill.additionalCosts,
     paymentMethod: bill.paymentMethod,
     customerNote: bill.customerNote,
     restaurantTableId: bill.restaurantTableId,
@@ -148,6 +150,7 @@ function serializeBill(bill: Awaited<ReturnType<typeof queryBills>>[number]): Bi
     paymentMethod: bill.paymentMethod,
     subtotalLaari: bill.subtotalLaari,
     totalLaari: bill.totalLaari,
+    additionalCosts: current?.additionalCosts ?? [],
     items: current?.items ?? [],
     customerNote: bill.customerNote,
     restaurantTableName: bill.restaurantTableName,

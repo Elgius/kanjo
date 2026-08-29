@@ -9,6 +9,7 @@ import { useFormStatus } from "react-dom";
 
 import { printBill, PrintableBillPortal } from "@/components/pos/printable-bill";
 import type { BillStatus } from "@/generated/prisma/enums";
+import { calculateAdditionalBillCosts, type AdditionalBillCostRate } from "@/lib/pos/additional-bill-costs";
 import { formatMvr } from "@/lib/pos/money";
 import { cn } from "@/lib/utils";
 import { amendPrintedBillAction, cancelHeldOrderAction, checkoutRegisterSaleAction, creditRegisterBillAction, holdRegisterOrderAction, printUnpaidBillAction } from "./actions";
@@ -129,6 +130,7 @@ export function RegisterSaleWorkspace({
   isRestaurant,
   restaurantTables,
   creditCustomers,
+  additionalBillCosts,
   heldOrders,
   permissions,
   initialHeldOrderId,
@@ -142,6 +144,7 @@ export function RegisterSaleWorkspace({
   isRestaurant: boolean;
   restaurantTables: RestaurantTable[];
   creditCustomers: CreditCustomer[];
+  additionalBillCosts: AdditionalBillCostRate[];
   heldOrders: HeldOrder[];
   permissions: { sale: boolean; hold: boolean; cancel: boolean; credit: boolean };
   initialHeldOrderId?: string;
@@ -198,10 +201,12 @@ export function RegisterSaleWorkspace({
     return quantity > 0 ? [{ ...item, quantity }] : [];
   });
   const itemCount = cartLines.reduce((total, item) => total + item.quantity, 0);
-  const totalLaari = cartLines.reduce(
+  const subtotalLaari = cartLines.reduce(
     (total, item) => total + item.retailPriceLaari * item.quantity,
     0,
   );
+  const calculatedAdditionalCosts = calculateAdditionalBillCosts(subtotalLaari, additionalBillCosts);
+  const totalLaari = calculatedAdditionalCosts.totalLaari;
   const serializedItems = JSON.stringify(
     cartLines.map((item) => ({ itemId: item.id, quantity: item.quantity })),
   );
@@ -531,15 +536,17 @@ export function RegisterSaleWorkspace({
           ) : null}
         </div>
 
-        <div className="flex min-h-[104px] flex-col justify-center gap-[9px] border-y border-border px-[18px]">
+        <div className="flex flex-col justify-center gap-[9px] border-y border-border px-[18px] py-4">
           <div className="flex justify-between text-[11px] leading-[14px] text-muted-foreground">
             <span>Subtotal · {itemCount} items</span>
-            <span className="font-mono">{formatMvr(totalLaari)}</span>
+            <span className="font-mono">{formatMvr(subtotalLaari)}</span>
           </div>
-          <div className="flex justify-between text-[11px] leading-[14px] text-muted-foreground">
-            <span>Tax</span>
-            <span>Included</span>
-          </div>
+          {calculatedAdditionalCosts.costs.map((cost) => (
+            <div key={cost.id} className="flex justify-between text-[11px] leading-[14px] text-muted-foreground">
+              <span>{cost.name} · {cost.type === "PERCENTAGE" ? `${cost.percentageBasisPoints! / 100}%` : "Flat rate"}</span>
+              <span className="font-mono">{formatMvr(cost.amountLaari)}</span>
+            </div>
+          ))}
           <div className="flex items-end justify-between pt-[3px]">
             <span className="text-[13px] font-bold leading-[17px]">Total</span>
             <span className="font-mono text-[22px] font-bold leading-[27px]">
@@ -641,11 +648,11 @@ export function RegisterSaleWorkspace({
         tableName={selectedRestaurantTable?.name}
         customerNote={customerNote.trim() || null}
         items={cartLines.map((item) => ({ key: item.id, name: item.name, sku: item.sku, quantity: item.quantity, unitPriceLaari: item.retailPriceLaari, lineTotalLaari: item.retailPriceLaari * item.quantity }))}
-        subtotalLaari={totalLaari}
+        subtotalLaari={subtotalLaari}
         totalLaari={totalLaari}
+        additionalCosts={calculatedAdditionalCosts.costs}
         paymentMethod={null}
         status="UNPAID"
-        showIncludedTax
       />
       </section>
     </div>

@@ -2,6 +2,7 @@ import type { Prisma, PrismaClient } from "@/generated/prisma/client";
 import type { BillStatus, PaymentMethod } from "@/generated/prisma/enums";
 import { auditCreateData, type AuditRequestContext } from "@/lib/audit-core";
 import {
+  costsJson,
   describeBillChanges,
   eventChanges,
   itemsJson,
@@ -10,6 +11,7 @@ import {
   snapshotJson,
   type BillSnapshot,
 } from "@/lib/pos/bill-revisions";
+import { getRegisterAdditionalBillCostRates } from "@/lib/pos/additional-bill-costs.server";
 import { PosError, prepareSaleInventory } from "@/lib/pos/sales";
 
 export type PrintedBillInput = {
@@ -75,6 +77,7 @@ async function replaceOrderSnapshot(tx: Transaction, orderId: string, snapshot: 
       restaurantTableId: snapshot.restaurantTableId,
       subtotalLaari: snapshot.subtotalLaari,
       totalLaari: snapshot.totalLaari,
+      additionalCosts: costsJson(snapshot),
       items: { create: orderLines(snapshot) },
     },
   });
@@ -84,6 +87,7 @@ function snapshotFromBill(bill: {
   items: Prisma.JsonValue;
   subtotalLaari: number;
   totalLaari: number;
+  additionalCosts: Prisma.JsonValue;
   paymentMethod: PaymentMethod;
   customerNote: string | null;
   restaurantTableId: string | null;
@@ -93,6 +97,7 @@ function snapshotFromBill(bill: {
     items: bill.items,
     subtotalLaari: bill.subtotalLaari,
     totalLaari: bill.totalLaari,
+    additionalCosts: bill.additionalCosts,
     paymentMethod: bill.paymentMethod,
     customerNote: bill.customerNote,
     restaurantTableId: bill.restaurantTableId,
@@ -132,6 +137,7 @@ async function updateTrackedBill(
     items: Prisma.JsonValue;
     subtotalLaari: number;
     totalLaari: number;
+    additionalCosts: Prisma.JsonValue;
     paymentMethod: PaymentMethod;
     customerNote: string | null;
     restaurantTableId: string | null;
@@ -160,6 +166,7 @@ async function updateTrackedBill(
         paymentMethod: snapshot.paymentMethod,
         subtotalLaari: snapshot.subtotalLaari,
         totalLaari: snapshot.totalLaari,
+        additionalCosts: costsJson(snapshot),
         items: itemsJson(snapshot),
         customerNote: snapshot.customerNote,
         restaurantTableId: snapshot.restaurantTableId,
@@ -188,11 +195,12 @@ export async function trackPrintedBill(db: PrismaClient, input: PrintedBillInput
       },
     });
     if (!shift) throw new PosError("The selected register does not have an open shift.");
-    const [{ lines }, table] = await Promise.all([
+    const [{ lines }, table, additionalCostRates] = await Promise.all([
       prepareSaleInventory(tx, shift, input.items),
       resolveTable(tx, shift.registerId, input.restaurantTableId, input.heldOrderId),
+      getRegisterAdditionalBillCostRates(tx, shift.registerId),
     ]);
-    const snapshot = makeBillSnapshot(lines, input.paymentMethod, input.customerNote ?? null, table);
+    const snapshot = makeBillSnapshot(lines, input.paymentMethod, input.customerNote ?? null, table, additionalCostRates);
 
     let orderId = input.heldOrderId ?? null;
     if (orderId) {
@@ -211,6 +219,7 @@ export async function trackPrintedBill(db: PrismaClient, input: PrintedBillInput
           restaurantTableId: snapshot.restaurantTableId,
           subtotalLaari: snapshot.subtotalLaari,
           totalLaari: snapshot.totalLaari,
+          additionalCosts: costsJson(snapshot),
           items: { create: orderLines(snapshot) },
         },
         select: { id: true },
@@ -220,12 +229,12 @@ export async function trackPrintedBill(db: PrismaClient, input: PrintedBillInput
 
     const existing = input.billId
       ? await tx.bill.findFirst({ where: { id: input.billId, orderId }, select: {
-          id: true, version: true, status: true, items: true, subtotalLaari: true, totalLaari: true,
+          id: true, version: true, status: true, items: true, subtotalLaari: true, totalLaari: true, additionalCosts: true,
           paymentMethod: true, customerNote: true, restaurantTableId: true, restaurantTableName: true,
           billNumber: true,
         } })
       : await tx.bill.findUnique({ where: { orderId }, select: {
-          id: true, version: true, status: true, items: true, subtotalLaari: true, totalLaari: true,
+          id: true, version: true, status: true, items: true, subtotalLaari: true, totalLaari: true, additionalCosts: true,
           paymentMethod: true, customerNote: true, restaurantTableId: true, restaurantTableName: true,
           billNumber: true,
         } });
@@ -258,6 +267,7 @@ export async function trackPrintedBill(db: PrismaClient, input: PrintedBillInput
           paymentMethod: snapshot.paymentMethod,
           subtotalLaari: snapshot.subtotalLaari,
           totalLaari: snapshot.totalLaari,
+          additionalCosts: costsJson(snapshot),
           items: itemsJson(snapshot),
           customerNote: snapshot.customerNote,
           restaurantTableId: snapshot.restaurantTableId,
@@ -310,17 +320,18 @@ export async function amendPrintedBill(db: PrismaClient, input: PrintedBillInput
       select: { id: true, registerId: true, register: { select: { purpose: true } } },
     });
     if (!shift) throw new PosError("The selected register does not have an open shift.");
-    const [bill, order, prepared, table] = await Promise.all([
+    const [bill, order, prepared, table, additionalCostRates] = await Promise.all([
       tx.bill.findFirst({ where: { id: input.billId, orderId: input.heldOrderId, registerShiftId: shift.id }, select: {
-        id: true, version: true, status: true, items: true, subtotalLaari: true, totalLaari: true,
+        id: true, version: true, status: true, items: true, subtotalLaari: true, totalLaari: true, additionalCosts: true,
         paymentMethod: true, customerNote: true, restaurantTableId: true, restaurantTableName: true,
       } }),
       tx.registerOrder.findFirst({ where: { id: input.heldOrderId, registerShiftId: shift.id, status: "HELD" }, select: { id: true } }),
       prepareSaleInventory(tx, shift, input.items),
       resolveTable(tx, shift.registerId, input.restaurantTableId, input.heldOrderId),
+      getRegisterAdditionalBillCostRates(tx, shift.registerId),
     ]);
     if (!bill || !order) throw new PosError("That tracked unpaid bill is no longer available.");
-    const snapshot = makeBillSnapshot(prepared.lines, input.paymentMethod, input.customerNote ?? null, table);
+    const snapshot = makeBillSnapshot(prepared.lines, input.paymentMethod, input.customerNote ?? null, table, additionalCostRates);
     const version = await updateTrackedBill(
       tx,
       bill,

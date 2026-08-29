@@ -7,6 +7,7 @@ import { formatHour, getBusinessDayRange, getMaldivesHour, shiftRange } from "@/
 import { maldivesDate, measuredPerServing, quantityNumber, stockUnitsFromMeasured } from "@/lib/pos/inventory";
 import { fuzzySearchMatches, fuzzySearchScore } from "@/lib/pos/search";
 import { getCustomerOptions } from "@/lib/pos/customers";
+import { parseAppliedAdditionalBillCosts } from "@/lib/pos/additional-bill-costs";
 
 export type InventoryFilters = {
   query?: string;
@@ -825,7 +826,7 @@ export async function getRegisterManagementData(registerId: string, receiptId?: 
   if (!register) return null;
 
   const shift = register.shifts[0] ?? null;
-  const [items, lastSale, heldOrders, receipt, restaurantTables, creditCustomers] = await Promise.all([
+  const [items, lastSale, heldOrders, receipt, restaurantTables, creditCustomers, additionalBillCosts] = await Promise.all([
     getSellableItems(register),
     shift
       ? prisma.sale.findFirst({
@@ -867,6 +868,7 @@ export async function getRegisterManagementData(registerId: string, receiptId?: 
             receiptNumber: true,
             subtotalLaari: true,
             totalLaari: true,
+            additionalCosts: true,
             paymentMethod: true,
             createdAt: true,
             createdBy: { select: { name: true } },
@@ -902,6 +904,17 @@ export async function getRegisterManagementData(registerId: string, receiptId?: 
         })
       : Promise.resolve([]),
     getCustomerOptions(),
+    prisma.additionalBillCost.findMany({
+      where: { registerId },
+      orderBy: { name: "asc" },
+      select: {
+        id: true,
+        name: true,
+        type: true,
+        percentageBasisPoints: true,
+        flatAmountLaari: true,
+      },
+    }),
   ]);
 
   return {
@@ -913,6 +926,7 @@ export async function getRegisterManagementData(registerId: string, receiptId?: 
       ? {
           ...receipt,
           receiptNumber: receipt.receiptNumber.toString(),
+          additionalCosts: parseAppliedAdditionalBillCosts(receipt.additionalCosts),
           bill: receipt.bill ? { ...receipt.bill, billNumber: receipt.bill.billNumber.toString() } : null,
           createdAt: receipt.createdAt.toISOString(),
         }
@@ -924,6 +938,7 @@ export async function getRegisterManagementData(registerId: string, receiptId?: 
       occupiedOrderId: table.orders[0]?.id ?? null,
     })),
     creditCustomers,
+    additionalBillCosts,
     heldOrders: heldOrders.map((order) => ({
       ...order,
       bill: order.bill ? { ...order.bill, billNumber: order.bill.billNumber.toString() } : null,
