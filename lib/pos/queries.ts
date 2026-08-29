@@ -848,7 +848,18 @@ export async function getRegisterManagementData(registerId: string, receiptId?: 
             restaurantTable: { select: { name: true } },
             totalLaari: true,
             heldAt: true,
-            bill: { select: { id: true, billNumber: true, version: true, status: true } },
+            bill: { select: {
+              id: true,
+              billNumber: true,
+              version: true,
+              status: true,
+              paymentLink: { select: {
+                paymentSlipKey: true,
+                paymentSlipFileName: true,
+                paymentSlipContentType: true,
+                paymentSlipUploadedAt: true,
+              } },
+            } },
             items: {
               orderBy: { id: "asc" },
               select: { productId: true, menuItemId: true, quantity: true },
@@ -941,7 +952,23 @@ export async function getRegisterManagementData(registerId: string, receiptId?: 
     additionalBillCosts,
     heldOrders: heldOrders.map((order) => ({
       ...order,
-      bill: order.bill ? { ...order.bill, billNumber: order.bill.billNumber.toString() } : null,
+      bill: order.bill ? {
+        id: order.bill.id,
+        billNumber: order.bill.billNumber.toString(),
+        version: order.bill.version,
+        status: order.bill.status,
+        hasPaymentLink: Boolean(order.bill.paymentLink),
+        paymentSlip: order.bill.paymentLink?.paymentSlipKey
+          && order.bill.paymentLink.paymentSlipFileName
+          && order.bill.paymentLink.paymentSlipContentType
+          && order.bill.paymentLink.paymentSlipUploadedAt
+          ? {
+              fileName: order.bill.paymentLink.paymentSlipFileName,
+              contentType: order.bill.paymentLink.paymentSlipContentType,
+              uploadedAt: order.bill.paymentLink.paymentSlipUploadedAt.toISOString(),
+            }
+          : null,
+      } : null,
       items: order.items.flatMap((item) => {
         const itemId = item.productId ?? item.menuItemId;
         return itemId ? [{ itemId, quantity: item.quantity }] : [];

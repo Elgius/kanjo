@@ -151,7 +151,7 @@ export default async function RegisterManagementPage({
           </section>
 
           <RegisterSaleWorkspace
-            key={`${lastSale?.id ?? "empty"}:${creditedBillId ?? "no-credit"}:${data.heldOrders.map((order) => order.id).join(",")}`}
+            key={`${lastSale?.id ?? "empty"}:${creditedBillId ?? "no-credit"}:${selectedHeldOrderId ?? "new"}`}
             registerId={register.id}
             registerName={register.name}
             registerCode={register.code}

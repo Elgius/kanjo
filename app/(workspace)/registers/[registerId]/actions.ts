@@ -10,8 +10,11 @@ import { prisma } from "@/lib/db";
 import { issueCustomerCredit } from "@/lib/pos/customers";
 import { amendPrintedBill, trackPrintedBill } from "@/lib/pos/bill-lifecycle";
 import { holdRegisterOrder } from "@/lib/pos/orders";
+import { normalizePaymentPhone } from "@/lib/pos/payment-links";
 import { PosError, recordSale } from "@/lib/pos/sales";
 import { parseRegisterCartForm } from "@/lib/pos/validation";
+
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function actorLabel(authorization: AuthorizationContext) {
   return authorization.user.username ?? authorization.user.email;
@@ -97,6 +100,167 @@ export async function printUnpaidBillAction(
     await auditFailure(authorization, "BILL_TRACK_START", message, { shiftId, registerId });
     return { ok: false as const, error: message };
   }
+}
+
+export async function generatePaymentLinkAction(
+  shiftId: string,
+  registerId: string,
+  phoneNumber: string,
+  input: PrintedBillClientInput,
+) {
+  const { authorization, shift } = await requireShiftPolicy("REGISTER_ORDER_HOLD", shiftId);
+  if (shift.registerId !== registerId) {
+    return { ok: false as const, error: "That shift does not belong to this register." };
+  }
+  const phone = normalizePaymentPhone(phoneNumber);
+  if (!phone) {
+    return { ok: false as const, error: "Enter a valid phone number." };
+  }
+  const parsed = parseRegisterCartForm(printedBillFormData(input));
+  if (!parsed.ok) return { ok: false as const, error: parsed.error };
+  if (input.billId && (!input.heldOrderId || !Number.isSafeInteger(input.expectedVersion))) {
+    return { ok: false as const, error: "Reload this tracked bill before creating its payment link." };
+  }
+  try {
+    const bill = await trackPrintedBill(prisma, {
+      shiftId,
+      actorId: authorization.user.id,
+      actorName: authorization.user.name,
+      billId: input.billId,
+      expectedVersion: input.expectedVersion,
+      heldOrderId: parsed.data.heldOrderId,
+      restaurantTableId: parsed.data.restaurantTableId,
+      customerNote: parsed.data.customerNote,
+      paymentMethod: parsed.data.paymentMethod,
+      items: parsed.data.items,
+      source: "PAYMENT_LINK",
+      paymentPhone: phone,
+      audit: { actorLabel: actorLabel(authorization), request: await getAuditRequestContext() },
+    });
+    return { ok: true as const, bill, paymentPath: `/payment/${bill.id}` };
+  } catch (error) {
+    console.error("Failed to create payment link", error);
+    const message = error instanceof PosError ? error.message : "The payment link could not be created.";
+    await auditFailure(authorization, "PAYMENT_LINK_CREATED", message, { shiftId, registerId });
+    return { ok: false as const, error: message };
+  }
+}
+
+export async function closePaymentLinkBillAction(
+  shiftId: string,
+  registerId: string,
+  billId: string,
+) {
+  const { authorization, shift } = await requireShiftPolicy("SALE_RECORD", shiftId);
+  if (shift.registerId !== registerId) {
+    return { ok: false as const, error: "That shift does not belong to this register." };
+  }
+
+  const bill = await prisma.bill.findFirst({
+    where: {
+      id: billId,
+      registerId,
+      registerShiftId: shiftId,
+      status: "UNPAID",
+      paymentLink: { paymentSlipKey: { not: null } },
+      order: { status: "HELD" },
+    },
+    select: {
+      id: true,
+      orderId: true,
+      customerNote: true,
+      restaurantTableId: true,
+      paymentMethod: true,
+      order: {
+        select: {
+          items: {
+            orderBy: { id: "asc" },
+            select: { productId: true, menuItemId: true, quantity: true },
+          },
+        },
+      },
+    },
+  });
+  if (!bill?.orderId || !bill.order) {
+    return { ok: false as const, error: "That payment-linked bill is no longer available to close." };
+  }
+  const items = bill.order.items.flatMap((item) => {
+    const itemId = item.productId ?? item.menuItemId;
+    return itemId ? [{ itemId, quantity: item.quantity }] : [];
+  });
+
+  try {
+    const sale = await recordSale(prisma, {
+      shiftId,
+      createdById: authorization.user.id,
+      cashierName: authorization.user.name,
+      heldOrderId: bill.orderId,
+      customerNote: bill.customerNote,
+      restaurantTableId: bill.restaurantTableId,
+      paymentMethod: bill.paymentMethod,
+      items,
+      audit: {
+        actorLabel: actorLabel(authorization),
+        request: await getAuditRequestContext(),
+      },
+    });
+    refreshRegister(registerId);
+    refreshBillHistory(registerId, shiftId);
+    return {
+      ok: true as const,
+      receiptId: sale.id,
+      receiptNumber: sale.receiptNumber.toString(),
+    };
+  } catch (error) {
+    const message = error instanceof PosError ? error.message : "The payment-linked bill could not be closed.";
+    await auditFailure(authorization, "SALE_RECORD", message, { shiftId, registerId, billId, source: "PAYMENT_SLIP" });
+    return { ok: false as const, error: message };
+  }
+}
+
+export async function pollPaymentSlipsAction(
+  shiftId: string,
+  registerId: string,
+  rawBillIds: string[],
+) {
+  const { shift } = await requireShiftPolicy("SALE_RECORD", shiftId);
+  if (shift.registerId !== registerId) {
+    return { ok: false as const, slips: [] };
+  }
+  const billIds = [...new Set(rawBillIds)].filter((id) => uuidPattern.test(id)).slice(0, 20);
+  if (!billIds.length) return { ok: true as const, slips: [] };
+
+  const links = await prisma.paymentLink.findMany({
+    where: {
+      billId: { in: billIds },
+      paymentSlipKey: { not: null },
+      bill: {
+        registerId,
+        registerShiftId: shiftId,
+        status: "UNPAID",
+        order: { status: "HELD" },
+      },
+    },
+    select: {
+      billId: true,
+      paymentSlipFileName: true,
+      paymentSlipContentType: true,
+      paymentSlipUploadedAt: true,
+    },
+  });
+  return {
+    ok: true as const,
+    slips: links.flatMap((link) => link.paymentSlipFileName
+      && link.paymentSlipContentType
+      && link.paymentSlipUploadedAt
+      ? [{
+          billId: link.billId,
+          fileName: link.paymentSlipFileName,
+          contentType: link.paymentSlipContentType,
+          uploadedAt: link.paymentSlipUploadedAt.toISOString(),
+        }]
+      : []),
+  };
 }
 
 export async function amendPrintedBillAction(

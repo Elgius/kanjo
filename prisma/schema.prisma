@@ -40,6 +40,7 @@ model User {
 
 enum PageKey {
   OVERVIEW
+  AI_COO
   REGISTERS
   INVENTORY
   STOCK
@@ -63,6 +64,7 @@ enum RegisterScopeMode {
 
 enum CapabilityKey {
   OVERVIEW_VIEW
+  AI_COO_ACCESS
   REGISTERS_VIEW
   REGISTER_ADMIN_VIEW
   REGISTER_SESSIONS_VIEW
@@ -522,6 +524,7 @@ model Bill {
   customerCreditBill   CustomerCreditBill? @relation(fields: [customerCreditBillId], references: [id], onDelete: Restrict)
   registerShift        RegisterShift      @relation(fields: [registerShiftId], references: [id], onDelete: Restrict)
   revisions            BillRevision[]
+  paymentLink          PaymentLink?
 
   @@index([openedAt(sort: Desc), id(sort: Desc)])
   @@index([registerId, openedAt(sort: Desc), id(sort: Desc)])
@@ -529,6 +532,25 @@ model Bill {
   @@index([status, openedAt(sort: Desc)])
   @@index([paymentMethod, openedAt(sort: Desc)])
   @@map("bills")
+}
+
+model PaymentLink {
+  billId                 String   @id @db.Uuid
+  phoneNumber            String
+  normalizedPhoneNumber  String
+  paymentSlipKey         String?
+  paymentSlipFileName    String?
+  paymentSlipContentType String?
+  paymentSlipSizeBytes   Int?
+  paymentSlipUploadedAt  DateTime?
+  createdAt              DateTime @default(now())
+  expiresAt              DateTime
+  updatedAt              DateTime @updatedAt
+  bill                   Bill     @relation(fields: [billId], references: [id], onDelete: Cascade)
+
+  @@index([normalizedPhoneNumber])
+  @@index([expiresAt])
+  @@map("payment_links")
 }
 
 model BillRevision {

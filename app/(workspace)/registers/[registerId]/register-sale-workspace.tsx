@@ -1,18 +1,19 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Minus, Plus, Printer, Search } from "lucide-react";
+import { ArrowRight, ExternalLink, FileCheck2, Minus, Phone, Plus, Printer, Search, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { flushSync } from "react-dom";
 import { useFormStatus } from "react-dom";
 
 import { printBill, PrintableBillPortal } from "@/components/pos/printable-bill";
+import { PaymentSlipDialog, type PaymentSlipReference } from "@/components/pos/payment-slip-dialog";
 import type { BillStatus } from "@/generated/prisma/enums";
 import { calculateAdditionalBillCosts, type AdditionalBillCostRate } from "@/lib/pos/additional-bill-costs";
 import { formatMvr } from "@/lib/pos/money";
 import { cn } from "@/lib/utils";
-import { amendPrintedBillAction, cancelHeldOrderAction, checkoutRegisterSaleAction, creditRegisterBillAction, holdRegisterOrderAction, printUnpaidBillAction } from "./actions";
+import { amendPrintedBillAction, cancelHeldOrderAction, checkoutRegisterSaleAction, closePaymentLinkBillAction, creditRegisterBillAction, generatePaymentLinkAction, holdRegisterOrderAction, pollPaymentSlipsAction, printUnpaidBillAction } from "./actions";
 
 type SellableItem = {
   id: string;
@@ -33,10 +34,18 @@ type HeldOrder = {
   totalLaari: number;
   heldAt: string;
   items: Array<{ itemId: string; quantity: number }>;
-  bill: { id: string; billNumber: string; version: number; status: BillStatus } | null;
+  bill: {
+    id: string;
+    billNumber: string;
+    version: number;
+    status: BillStatus;
+    hasPaymentLink: boolean;
+    paymentSlip: { fileName: string; contentType: string; uploadedAt: string } | null;
+  } | null;
 };
 
 type TrackedBill = { id: string; billNumber: string; version: number };
+type PaymentSlipMeta = { fileName: string; contentType: string; uploadedAt: string };
 
 type RestaurantTable = {
   id: string;
@@ -54,6 +63,8 @@ type CreditCustomer = {
 };
 
 type PaymentMethod = "CASH" | "CARD" | "MOBILE";
+
+const PAYMENT_COUNTRY_CODE = "+960";
 
 function SubmitButtons({
   permissions,
@@ -169,6 +180,19 @@ export function RegisterSaleWorkspace({
     initialOrder?.bill?.status === "UNPAID" ? initialOrder.bill : null,
   );
   const [trackingError, setTrackingError] = useState<string | null>(null);
+  const [paymentCountryCode, setPaymentCountryCode] = useState(PAYMENT_COUNTRY_CODE);
+  const [paymentPhone, setPaymentPhone] = useState("");
+  const [paymentPath, setPaymentPath] = useState<string | null>(null);
+  const [paymentLinkError, setPaymentLinkError] = useState<string | null>(null);
+  const [generatingPaymentLink, setGeneratingPaymentLink] = useState(false);
+  const [reviewingSlip, setReviewingSlip] = useState<PaymentSlipReference | null>(null);
+  const [closingSlipBill, setClosingSlipBill] = useState(false);
+  const [closeSlipError, setCloseSlipError] = useState<string | null>(null);
+  const [livePaymentSlips, setLivePaymentSlips] = useState<Record<string, PaymentSlipMeta>>(() => Object.fromEntries(
+    heldOrders.flatMap((order) => order.bill?.paymentSlip ? [[order.bill.id, order.bill.paymentSlip]] : []),
+  ));
+  const paymentDialogRef = useRef<HTMLDialogElement>(null);
+  const reviewedSlipsRef = useRef(new Set<string>());
   const trackedBillRef = useRef<TrackedBill | null>(trackedBill);
   const orderIdRef = useRef(heldOrderId);
   const cartRef = useRef(cart);
@@ -293,6 +317,50 @@ export function RegisterSaleWorkspace({
   }
 
   useEffect(() => {
+    const billIds = heldOrders.flatMap((order) => order.bill?.hasPaymentLink && order.bill.status === "UNPAID" ? [order.bill.id] : []);
+    if (!permissions.sale || !billIds.length) return;
+    let cancelled = false;
+    async function poll() {
+      const result = await pollPaymentSlipsAction(shiftId, registerId, billIds).catch(() => null);
+      if (cancelled || !result?.ok) return;
+      setLivePaymentSlips((current) => ({
+        ...current,
+        ...Object.fromEntries(result.slips.map((slip) => [slip.billId, {
+          fileName: slip.fileName,
+          contentType: slip.contentType,
+          uploadedAt: slip.uploadedAt,
+        }])),
+      }));
+    }
+    void poll();
+    const timer = window.setInterval(() => void poll(), 3_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [heldOrders, permissions.sale, registerId, shiftId]);
+
+  useEffect(() => {
+    if (reviewingSlip) return;
+    const order = heldOrders.find((candidate) => {
+      const slip = candidate.bill ? livePaymentSlips[candidate.bill.id] ?? candidate.bill.paymentSlip : null;
+      return slip && !reviewedSlipsRef.current.has(`${candidate.bill!.id}:${slip.uploadedAt}`);
+    });
+    const bill = order?.bill;
+    const slip = bill ? livePaymentSlips[bill.id] ?? bill.paymentSlip : null;
+    if (!bill || !slip) return;
+    reviewedSlipsRef.current.add(`${bill.id}:${slip.uploadedAt}`);
+    setCloseSlipError(null);
+    setReviewingSlip({
+      billId: bill.id,
+      billNumber: bill.billNumber,
+      fileName: slip.fileName,
+      contentType: slip.contentType,
+      uploadedAt: slip.uploadedAt,
+    });
+  }, [heldOrders, livePaymentSlips, reviewingSlip]);
+
+  useEffect(() => {
     if (!trackedBillRef.current) return;
     const timer = window.setTimeout(() => queueAmendmentRef.current(cartRef.current, customerNote), 350);
     return () => window.clearTimeout(timer);
@@ -325,6 +393,53 @@ export function RegisterSaleWorkspace({
     printBill("current");
   }
 
+  async function generatePaymentLink() {
+    setPaymentLinkError(null);
+    setGeneratingPaymentLink(true);
+    await amendmentQueueRef.current;
+    const current = trackedBillRef.current;
+    const result = await generatePaymentLinkAction(
+      shiftId,
+      registerId,
+      `${paymentCountryCode}${paymentPhone}`,
+      {
+      billId: current?.id,
+      heldOrderId: orderIdRef.current || null,
+      expectedVersion: current?.version,
+      restaurantTableId: restaurantTableId || null,
+      customerNote: customerNote || null,
+      paymentMethod,
+      items: clientItems(cart),
+      },
+    );
+    setGeneratingPaymentLink(false);
+    if (!result.ok) {
+      setPaymentLinkError(result.error);
+      return;
+    }
+    const next = { id: result.bill.id, billNumber: result.bill.billNumber, version: result.bill.version };
+    trackedBillRef.current = next;
+    orderIdRef.current = result.bill.orderId;
+    setTrackedBill(next);
+    setHeldOrderId(result.bill.orderId);
+    setPaymentPath(result.paymentPath);
+    router.refresh();
+  }
+
+  async function closeUploadedBill() {
+    if (!reviewingSlip || closingSlipBill) return;
+    setClosingSlipBill(true);
+    setCloseSlipError(null);
+    const result = await closePaymentLinkBillAction(shiftId, registerId, reviewingSlip.billId);
+    setClosingSlipBill(false);
+    if (!result.ok) {
+      setCloseSlipError(result.error);
+      return;
+    }
+    setReviewingSlip(null);
+    router.refresh();
+  }
+
   const checkoutAction = checkoutRegisterSaleAction.bind(null, shiftId, registerId);
   const holdAction = holdRegisterOrderAction.bind(null, shiftId, registerId);
   const creditHoldAction = creditRegisterBillAction.bind(null, shiftId, registerId);
@@ -336,11 +451,15 @@ export function RegisterSaleWorkspace({
       {heldOrders.length ? (
         <nav aria-label="Physically held bills" className="flex max-w-full items-center gap-2 overflow-x-auto rounded-xl border border-border bg-card p-2">
           <button type="button" onClick={() => loadHeldOrder("")} className={cn("h-9 shrink-0 rounded-lg px-3 text-[11px] font-semibold", !heldOrderId ? "bg-primary text-primary-foreground" : "border border-border")}>New bill</button>
-          {heldOrders.map((order) => (
-            <button key={order.id} type="button" onClick={() => loadHeldOrder(order.id)} className={cn("h-9 shrink-0 rounded-lg px-3 text-[11px] font-semibold", heldOrderId === order.id ? "bg-primary text-primary-foreground" : "border border-border")}>
-              {order.restaurantTable?.name ? `${order.restaurantTable.name} · ` : "Tab · "}{formatMvr(order.totalLaari)}
-            </button>
-          ))}
+          {heldOrders.map((order) => {
+            const slip = order.bill ? livePaymentSlips[order.bill.id] ?? order.bill.paymentSlip : null;
+            return <span key={order.id} className="flex shrink-0 items-center gap-1">
+              <button type="button" onClick={() => loadHeldOrder(order.id)} className={cn("h-9 rounded-lg px-3 text-[11px] font-semibold", heldOrderId === order.id ? "bg-primary text-primary-foreground" : "border border-border")}>
+                {order.restaurantTable?.name ? `${order.restaurantTable.name} · ` : "Tab · "}{formatMvr(order.totalLaari)}
+              </button>
+              {slip && order.bill ? <button type="button" aria-label={`View payment slip for bill ${order.bill.billNumber}`} title="View uploaded payment slip" onClick={() => { reviewedSlipsRef.current.add(`${order.bill!.id}:${slip.uploadedAt}`); setCloseSlipError(null); setReviewingSlip({ billId: order.bill!.id, billNumber: order.bill!.billNumber, fileName: slip.fileName, contentType: slip.contentType, uploadedAt: slip.uploadedAt }); }} className="flex size-9 items-center justify-center rounded-lg border border-chart-1/35 bg-chart-1/10 text-chart-1 hover:bg-chart-1/20"><FileCheck2 className="size-4" aria-hidden="true" /></button> : null}
+            </span>;
+          })}
         </nav>
       ) : null}
       <section className="grid min-h-[606px] gap-3.5 xl:grid-cols-[minmax(0,720px)_minmax(340px,394px)]">
@@ -479,6 +598,20 @@ export function RegisterSaleWorkspace({
               className="h-[30px] rounded-[7px] border border-border px-2.5 text-[10px] text-muted-foreground"
             >
               Clear
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setPaymentLinkError(null);
+                setPaymentPath(null);
+                paymentDialogRef.current?.showModal();
+              }}
+              disabled={!cartLines.length || !permissions.hold}
+              aria-label="Create payment link"
+              title={cartLines.length ? "Create payment link" : "Add an item before creating a payment link"}
+              className="flex size-[30px] items-center justify-center rounded-[7px] border border-border text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <ArrowRight className="size-3.5" aria-hidden="true" />
             </button>
             <button
               type="button"
@@ -639,6 +772,108 @@ export function RegisterSaleWorkspace({
         </div>
       </form>
 
+      <dialog
+        ref={paymentDialogRef}
+        onClose={() => {
+          setPaymentLinkError(null);
+          setPaymentPath(null);
+        }}
+        className="m-auto w-[min(460px,calc(100%-32px))] rounded-xl border border-border bg-card p-0 text-foreground shadow-xl backdrop:bg-black/35"
+      >
+        <div className="grid gap-5 p-5 sm:p-6">
+          <header className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-[10px] tracking-[0.08em] text-muted-foreground">PAYMENT LINK</p>
+              <h2 className="mt-1 font-serif text-2xl font-semibold">Send this bill</h2>
+              <p className="mt-2 text-xs leading-5 text-muted-foreground">Enter the customer&apos;s phone number to generate a public bill link.</p>
+            </div>
+            <button type="button" onClick={() => paymentDialogRef.current?.close()} aria-label="Close payment link dialog" className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-border text-muted-foreground hover:bg-accent">
+              <X className="size-4" aria-hidden="true" />
+            </button>
+          </header>
+
+          <div className="grid grid-cols-[112px_minmax(0,1fr)] gap-3">
+            <label className="grid gap-2 text-[10px] tracking-[0.08em] text-muted-foreground">
+              COUNTRY CODE
+              <span className="flex h-11 items-center gap-2 rounded-lg border border-border bg-background px-3 focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/15">
+                <Phone className="size-4 shrink-0" aria-hidden="true" />
+                <input
+                  type="tel"
+                  inputMode="numeric"
+                  autoComplete="tel-country-code"
+                  aria-label="Country code"
+                  value={paymentCountryCode}
+                  onChange={(event) => {
+                    const digits = event.target.value.replace(/\D/g, "").slice(0, 3);
+                    setPaymentCountryCode(digits ? `+${digits}` : "+");
+                    setPaymentPath(null);
+                    setPaymentLinkError(null);
+                  }}
+                  maxLength={4}
+                  className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none"
+                />
+              </span>
+            </label>
+            <label className="grid gap-2 text-[10px] tracking-[0.08em] text-muted-foreground">
+              PHONE NUMBER
+              <input
+                autoFocus
+                type="tel"
+                inputMode="numeric"
+                autoComplete="tel-national"
+                value={paymentPhone}
+                onChange={(event) => {
+                  setPaymentPhone(
+                    event.target.value
+                      .replace(/\D/g, "")
+                      .slice(0, 14),
+                  );
+                  setPaymentPath(null);
+                  setPaymentLinkError(null);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    if (
+                      paymentCountryCode.length > 1
+                      && paymentPhone.length > 0
+                      && !generatingPaymentLink
+                    ) void generatePaymentLink();
+                  }
+                }}
+                maxLength={14}
+                placeholder="0000000"
+                className="h-11 min-w-0 rounded-lg border border-border bg-background px-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-ring focus:ring-2 focus:ring-ring/15"
+              />
+            </label>
+          </div>
+
+          {paymentLinkError ? <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-xs text-destructive">{paymentLinkError}</p> : null}
+
+          {paymentPath ? (
+            <div className="grid gap-2 rounded-xl border border-chart-1/35 bg-chart-1/5 p-4">
+              <p className="text-[10px] tracking-[0.08em] text-muted-foreground">LINK READY</p>
+              <Link href={paymentPath} target="_blank" rel="noreferrer" className="flex min-w-0 items-center justify-between gap-3 rounded-lg bg-primary px-3 py-3 text-primary-foreground">
+                <span className="min-w-0 truncate font-mono text-[11px]">{typeof window === "undefined" ? paymentPath : `${window.location.origin}${paymentPath}`}</span>
+                <ExternalLink className="size-4 shrink-0" aria-hidden="true" />
+              </Link>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => void generatePaymentLink()}
+              disabled={paymentCountryCode.length <= 1 || !paymentPhone || generatingPaymentLink}
+              className="flex h-11 items-center justify-between rounded-lg bg-primary px-4 text-xs font-semibold text-primary-foreground disabled:opacity-45"
+            >
+              <span>{generatingPaymentLink ? "Generating…" : "Generate link"}</span>
+              <ArrowRight className="size-4" aria-hidden="true" />
+            </button>
+          )}
+
+          <p className="text-[10px] leading-4 text-muted-foreground">This version generates the link only. Sending it by SMS will be connected separately.</p>
+        </div>
+      </dialog>
+
       <PrintableBillPortal
         className="current-order-print-root pointer-events-none fixed -left-[10000px] top-0"
         registerName={registerName}
@@ -654,6 +889,7 @@ export function RegisterSaleWorkspace({
         paymentMethod={null}
         status="UNPAID"
       />
+      {reviewingSlip ? <PaymentSlipDialog key={`${reviewingSlip.billId}:${reviewingSlip.uploadedAt}`} slip={reviewingSlip} closeError={closeSlipError} closing={closingSlipBill} onClose={() => { if (!closingSlipBill) { setReviewingSlip(null); setCloseSlipError(null); } }} onCloseBill={permissions.sale ? () => void closeUploadedBill() : undefined} /> : null}
       </section>
     </div>
   );

@@ -143,6 +143,7 @@ export async function requireAuthorization() {
 
 const deniedPath: Record<PageKey, string> = {
   OVERVIEW: "/access-denied",
+  AI_COO: "/access-denied",
   REGISTERS: "/registers?error=You%20do%20not%20have%20permission%20for%20that%20register%20operation.",
   INVENTORY: "/inventory?error=You%20do%20not%20have%20permission%20for%20that%20inventory%20operation.",
   STOCK: "/stock?error=You%20do%20not%20have%20permission%20for%20that%20stock%20operation.",

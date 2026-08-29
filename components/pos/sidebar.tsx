@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
+  BotMessageSquare,
   Boxes,
   ChartNoAxesCombined,
   ChevronDown,
@@ -102,6 +103,17 @@ function Navigation({ allowedPages, registerTree }: { allowedPages: PageKey[]; r
   return (
     <SidebarGroup className="px-5 py-0">
       <SidebarMenu className="gap-1.5">
+        {allowedPages.includes("AI_COO") ? <SidebarMenuItem>
+          <SidebarMenuButton
+            render={<Link href="/ai-coo" prefetch={false} />}
+            isActive={pathname.startsWith("/ai-coo")}
+            tooltip="AI COO"
+            className="h-10 gap-3 rounded-lg px-3 text-[13px] font-medium data-active:bg-sidebar-primary data-active:text-sidebar-primary-foreground group-data-[collapsible=icon]:size-10!"
+          >
+            <BotMessageSquare className="size-[17px]!" aria-hidden="true" />
+            <span>AI COO</span>
+          </SidebarMenuButton>
+        </SidebarMenuItem> : null}
         {visibleNavigation.map(({ href, label, icon: Icon }) => {
           const active = href === "/" ? pathname === "/" : pathname.startsWith(href);
 

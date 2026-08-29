@@ -1,6 +1,6 @@
 import { PageContainer, PageHeader, Surface } from "@/components/pos/primitives";
 import { requireCapability } from "@/lib/authorization";
-import { prisma } from "@/lib/db";
+import { getSettingsAccounts, getSettingsRoleOptions } from "@/lib/settings-queries";
 import { cn } from "@/lib/utils";
 import {
   assignRoleAction,
@@ -23,21 +23,8 @@ export default async function SettingsPage({ searchParams }: PageProps<"/setting
   const authorization = await requireCapability("SETTINGS_VIEW", "SETTINGS_PAGE");
   const params = await searchParams;
   const [accounts, roles] = await Promise.all([
-    prisma.user.findMany({
-      where: { accounts: { some: {} } },
-      orderBy: [{ username: "asc" }, { email: "asc" }],
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        username: true,
-        isSiteAdmin: true,
-        createdAt: true,
-        roleId: true,
-        role: { select: { name: true } },
-      },
-    }),
-    prisma.role.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),
+    getSettingsAccounts(),
+    getSettingsRoleOptions(),
   ]);
   const success = single(params.success);
   const error = single(params.error);
