@@ -618,11 +618,10 @@ export function RegisterSaleWorkspace({
             >
               <ArrowRight className="size-3.5" aria-hidden="true" />
             </button>
-
+            <PrintRequestControls billId={trackedBill?.id} onRequest={printUnpaidBill} onPrint={() => printBill("current")} disabled={!cartLines.length || !permissions.hold} label="Print unpaid bill" />
           </div>
         </div>
 
-        <PrintRequestControls billId={trackedBill?.id} onRequest={printUnpaidBill} onPrint={() => printBill("current")} disabled={!cartLines.length || !permissions.hold} label="Print unpaid bill" />
         <div className="flex min-h-[246px] flex-1 flex-col overflow-y-auto px-[18px] pt-2">
           {cartLines.map((item) => (
             <div key={item.id} className="flex min-h-[78px] items-center border-b border-border">
