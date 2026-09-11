@@ -1,3 +1,4 @@
+import { MutationForm } from "@/components/pos/mutation-form";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
@@ -116,7 +117,8 @@ export default async function RegisterManagementPage({
             <RegisterHeaderActions
               registerId={register.id}
               shiftId={shift.id}
-              expectedCashLaari={shift.openingCashLaari + shift.cashSalesLaari}
+              heldOrders={data.heldOrders}
+              canCancel={mayOperateShift && can(authorization, "ORDER_CANCEL")}
               canEdit={mayOperateShift && can(authorization, "SHIFT_CLOSE")}
             />
           ) : null}
@@ -185,7 +187,7 @@ export default async function RegisterManagementPage({
               </p>
             </div>
             {can(authorization, "SHIFT_OPEN") ? (
-              <form action={openShiftAction.bind(null, register.id)} className="flex items-end gap-2">
+              <MutationForm action={openShiftAction.bind(null, register.id)} className="flex items-end gap-2">
                 <label className="grid gap-1.5 text-left text-[10px] tracking-[0.08em] text-muted-foreground">
                   OPENING CASH (MVR)
                   <input
@@ -202,7 +204,7 @@ export default async function RegisterManagementPage({
                 >
                   Open shift
                 </button>
-              </form>
+              </MutationForm>
             ) : (
               <span className="rounded-lg bg-accent px-3 py-2 text-[10px] text-muted-foreground">
                 VIEW ONLY

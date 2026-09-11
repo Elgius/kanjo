@@ -225,7 +225,7 @@ export function parseCreditSettlementForm(formData: FormData) {
 
 export function parseOpeningCash(formData: FormData) {
   const openingCashLaari = parseMvr(formData.get("openingCash"));
-  if (openingCashLaari === null) {
+  if (openingCashLaari === null || openingCashLaari > 2147483647) {
     return { ok: false, error: "Opening cash must be a valid non-negative MVR amount." } as const;
   }
   return { ok: true, data: { openingCashLaari } } as const;
@@ -233,7 +233,7 @@ export function parseOpeningCash(formData: FormData) {
 
 export function parseClosingCash(formData: FormData) {
   const closingCashLaari = parseMvr(formData.get("closingCash"));
-  if (closingCashLaari === null) {
+  if (closingCashLaari === null || closingCashLaari > 2147483647) {
     return { ok: false, error: "Closing cash must be a valid non-negative MVR amount." } as const;
   }
   return { ok: true, data: { closingCashLaari } } as const;

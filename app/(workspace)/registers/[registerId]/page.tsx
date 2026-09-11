@@ -1,3 +1,4 @@
+import { MutationForm } from "@/components/pos/mutation-form";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
@@ -49,9 +50,7 @@ export default async function RegisterManagementPage({
   const error = single(query.error);
   const selectedHeldOrderId = single(query.order);
   const creditedBillId = single(query.credit);
-  const cashExpectedLaari = shift
-    ? shift.openingCashLaari + shift.cashSalesLaari
-    : 0;
+
 
   return (
     <PageContainer className="gap-[22px] py-8 lg:py-[34px]">
@@ -117,7 +116,8 @@ export default async function RegisterManagementPage({
             <RegisterHeaderActions
               registerId={register.id}
               shiftId={shift.id}
-              expectedCashLaari={cashExpectedLaari}
+              heldOrders={data.heldOrders}
+              canCancel={mayOperateShift && can(authorization, "ORDER_CANCEL")}
               canEdit={mayOperateShift && can(authorization, "SHIFT_CLOSE")}
             />
           ) : null}
@@ -129,7 +129,7 @@ export default async function RegisterManagementPage({
           <section className="grid gap-3.5 sm:grid-cols-2 xl:grid-cols-4">
             {[
               ["NET SALES", formatMvr(shift.salesLaari)],
-              ["CASH EXPECTED", formatMvr(cashExpectedLaari)],
+
               ["TRANSACTIONS", String(shift.transactionCount)],
             ].map(([label, value]) => (
               <Surface key={label} className="flex min-h-[104px] flex-col justify-between p-[18px_20px]">
@@ -185,7 +185,7 @@ export default async function RegisterManagementPage({
               </p>
             </div>
             {can(authorization, "SHIFT_OPEN") ? (
-              <form action={openShiftAction.bind(null, register.id)} className="flex items-end gap-2">
+              <MutationForm action={openShiftAction.bind(null, register.id)} className="flex items-end gap-2">
                 <label className="grid gap-1.5 text-left text-[10px] tracking-[0.08em] text-muted-foreground">
                   OPENING CASH (MVR)
                   <input
@@ -202,7 +202,7 @@ export default async function RegisterManagementPage({
                 >
                   Open shift
                 </button>
-              </form>
+              </MutationForm>
             ) : (
               <span className="rounded-lg bg-accent px-3 py-2 text-[10px] text-muted-foreground">
                 VIEW ONLY

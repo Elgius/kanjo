@@ -1,3 +1,4 @@
+import { mutateOnce } from "@/lib/pos/mutation";
 import { Prisma, type PrismaClient } from "@/generated/prisma/client";
 import type { BillStatus, PaymentMethod } from "@/generated/prisma/enums";
 import { auditCreateData, type AuditRequestContext } from "@/lib/audit-core";
@@ -22,6 +23,7 @@ import {
 export class PosError extends Error {}
 
 export type RecordSaleInput = {
+  requestId?: string;
   shiftId: string;
   createdById: string;
   cashierName?: string;
@@ -289,7 +291,7 @@ export async function prepareSaleInventory(
 }
 
 export async function recordSale(db: PrismaClient, input: RecordSaleInput) {
-  return db.$transaction(async (tx) => {
+  return mutateOnce(db, `sale:${input.createdById}:${input.shiftId}`, input.requestId, { items: input.items, heldOrderId: input.heldOrderId, paymentMethod: input.paymentMethod, customerNote: input.customerNote, restaurantTableId: input.restaurantTableId }, async (tx) => {
     const shift = await tx.registerShift.findFirst({
       where: { id: input.shiftId, status: "OPEN" },
       select: {
@@ -561,7 +563,7 @@ export async function recordSale(db: PrismaClient, input: RecordSaleInput) {
       }),
     });
     return { ...sale, billNumber };
-  }, { isolationLevel: "Serializable" });
+  });
 }
 
 export async function receiveInventory(

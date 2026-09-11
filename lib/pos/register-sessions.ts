@@ -215,6 +215,7 @@ export async function getRegisterSession(registerId: string, sessionId: string, 
       status: true,
       openingCashLaari: true,
       closingCashLaari: true,
+      expectedCashLaari: true, cashVarianceLaari: true, cashVarianceReason: true,
       openedAt: true,
       closedAt: true,
       openedBy: { select: { name: true } },
@@ -297,7 +298,7 @@ export async function getRegisterSession(registerId: string, sessionId: string, 
     (total, sale) => total + (sale.paymentMethod === "CASH" ? sale.totalLaari : 0),
     0,
   );
-  const expectedCashLaari = session.openingCashLaari + cashSalesLaari;
+  const expectedCashLaari = session.expectedCashLaari ?? (session.openingCashLaari + cashSalesLaari);
 
   return {
     ...session,
@@ -306,7 +307,7 @@ export async function getRegisterSession(registerId: string, sessionId: string, 
       completedTransactions: completed.length,
       expectedCashLaari,
       varianceLaari:
-        session.closingCashLaari === null ? null : session.closingCashLaari - expectedCashLaari,
+        session.cashVarianceLaari ?? (session.closingCashLaari === null ? null : session.closingCashLaari - expectedCashLaari),
     },
     details: summarizeSessionDetails(session.sales),
     transactions: session.bills.map<SessionTransaction>((bill) => {

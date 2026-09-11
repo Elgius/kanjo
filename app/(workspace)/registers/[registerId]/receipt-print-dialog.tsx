@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import { usePathname, useRouter } from "next/navigation";
 
+import { PrintRequestControls } from "@/components/pos/print-request-controls";
 import { printBill, PrintableBill, PrintableBillPortal, type PrintableBillProps } from "@/components/pos/printable-bill";
 import type { BillStatus } from "@/generated/prisma/enums";
 import type { AppliedAdditionalBillCost } from "@/lib/pos/additional-bill-costs";
@@ -16,7 +17,7 @@ export type PrintableReceipt = {
   paymentMethod: "CASH" | "CARD" | "MOBILE";
   createdAt: string;
   createdBy: { name: string };
-  bill: { billNumber: string; status: BillStatus } | null;
+  bill: { id: string; billNumber: string; status: BillStatus } | null;
   items: Array<{
     id: string;
     productName: string;
@@ -87,7 +88,7 @@ export function ReceiptPrintDialog({
 
         <div className="flex justify-end gap-2.5">
           <button type="button" onClick={close} className="h-10 rounded-lg border border-border px-4 text-xs font-semibold">No, thanks</button>
-          <button type="button" onClick={() => printBill("receipt")} className="h-10 rounded-lg bg-primary px-4 text-xs font-semibold text-primary-foreground">Yes, print bill</button>
+          <PrintRequestControls billId={receipt.bill?.id} disabled={!receipt.bill} onPrint={() => printBill("receipt")} label="Yes, print bill" />
         </div>
         <PrintableBillPortal {...printableBillProps} className="receipt-print-root pointer-events-none fixed -left-[10000px] top-0" />
       </div>

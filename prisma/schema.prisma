@@ -382,6 +382,7 @@ model RestaurantTable {
 }
 
 model Customer {
+  mergedIntoId String? @db.Uuid
   id               String               @id @default(uuid()) @db.Uuid
   name             String
   email            String?
@@ -451,6 +452,9 @@ model InventoryBatch {
 }
 
 model RegisterShift {
+  expectedCashLaari Int?
+  cashVarianceLaari Int?
+  cashVarianceReason String?
   id                 String               @id @default(uuid()) @db.Uuid
   registerId         String               @db.Uuid
   openedById         String
@@ -503,6 +507,8 @@ model Sale {
 }
 
 model Bill {
+  printRequestCount Int @default(0)
+  lastPrintRequestedAt DateTime?
   id                   String             @id @default(uuid()) @db.Uuid
   billNumber           BigInt             @unique @default(autoincrement())
   saleId               String?            @unique @db.Uuid
@@ -818,4 +824,14 @@ model Verification {
 
   @@index([identifier])
   @@map("verification")
+}
+
+model MutationRequest {
+  scope       String
+  key         String
+  fingerprint String
+  result      String
+  createdAt   DateTime @default(now())
+  @@id([scope, key])
+  @@map("mutation_requests")
 }

@@ -839,7 +839,6 @@ export async function getRegisterManagementData(registerId: string, receiptId?: 
       ? prisma.registerOrder.findMany({
           where: { registerShiftId: shift.id, status: "HELD" },
           orderBy: { heldAt: "desc" },
-          take: 20,
           select: {
             id: true,
             customerNote: true,
@@ -884,7 +883,7 @@ export async function getRegisterManagementData(registerId: string, receiptId?: 
             paymentMethod: true,
             createdAt: true,
             createdBy: { select: { name: true } },
-            bill: { select: { billNumber: true, status: true } },
+            bill: { select: { id: true, billNumber: true, status: true } },
             items: {
               orderBy: { id: "asc" },
               select: {

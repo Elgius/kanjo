@@ -1,3 +1,5 @@
+import { mutateOnce } from "@/lib/pos/mutation";
+import { recordPrintRequest } from "@/lib/pos/print-tracking";
 import type { Prisma, PrismaClient } from "@/generated/prisma/client";
 import type { BillStatus, PaymentMethod } from "@/generated/prisma/enums";
 import { auditCreateData, type AuditRequestContext } from "@/lib/audit-core";
@@ -15,6 +17,8 @@ import { getRegisterAdditionalBillCostRates } from "@/lib/pos/additional-bill-co
 import { PosError, prepareSaleInventory } from "@/lib/pos/sales";
 
 export type PrintedBillInput = {
+  requestId?: string;
+  printReason?: string;
   shiftId: string;
   actorId: string;
   actorName: string;
@@ -187,7 +191,7 @@ async function updateTrackedBill(
 }
 
 export async function trackPrintedBill(db: PrismaClient, input: PrintedBillInput) {
-  return db.$transaction(async (tx) => {
+  return mutateOnce(db, `track-print:${input.actorId}:${input.shiftId}`, input.requestId, { ...input, audit: undefined }, async (tx) => {
     const shift = await tx.registerShift.findFirst({
       where: { id: input.shiftId, status: "OPEN" },
       select: {
@@ -326,21 +330,24 @@ export async function trackPrintedBill(db: PrismaClient, input: PrintedBillInput
         summary: paymentLink
           ? "Payment link created for unpaid bill."
           : existing
-            ? "Unpaid bill reprinted."
+            ? "Unpaid bill reprint requested."
             : "Unpaid bill tracking started.",
         metadata: { registerId: shift.registerId, shiftId: shift.id, orderId, billNumber: bill.billNumber },
         request: input.audit.request,
       }),
     });
 
+    const printHistory = input.source === "PAYMENT_LINK" ? null : await recordPrintRequest(tx, { billId: bill.id, reason: input.printReason ?? "", actorId: input.actorId, actorLabel: input.audit.actorLabel });
     return {
+      printRequestCount: printHistory?.printRequestCount ?? 0,
+      lastPrintRequestedAt: printHistory?.lastPrintRequestedAt ?? null,
       id: bill.id,
       billNumber: bill.billNumber.toString(),
       orderId,
       version: bill.version,
       snapshot,
     };
-  }, { isolationLevel: "Serializable" });
+  });
 }
 
 export async function amendPrintedBill(db: PrismaClient, input: PrintedBillInput & { billId: string; heldOrderId: string; expectedVersion: number }) {

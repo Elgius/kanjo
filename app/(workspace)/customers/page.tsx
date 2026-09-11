@@ -1,3 +1,6 @@
+import { CustomerMatchFields } from "./customer-match-fields";
+import { CreditReview } from "@/components/pos/credit-review";
+import { MutationForm } from "@/components/pos/mutation-form";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { ArrowRight, Pencil, Search, UserRound } from "lucide-react";
@@ -53,15 +56,13 @@ export default async function CustomersPage({
       {canCreate ? (
         <details className="rounded-xl border border-border bg-card p-4 sm:p-5">
           <summary className="cursor-pointer text-sm font-semibold">Add customer</summary>
-          <form action={createCustomerAction} className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            <label className="grid gap-1.5 text-[10px] text-muted-foreground">NAME<input name="name" required maxLength={100} className={fieldClass} /></label>
-            <label className="grid gap-1.5 text-[10px] text-muted-foreground">EMAIL<input name="email" type="email" maxLength={254} className={fieldClass} /></label>
-            <label className="grid gap-1.5 text-[10px] text-muted-foreground">PHONE NUMBER<input name="phoneNumber" type="tel" maxLength={40} className={fieldClass} /></label>
+          <MutationForm action={createCustomerAction} className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            <CustomerMatchFields customers={data.customers} />
             <label className="grid gap-1.5 text-[10px] text-muted-foreground">NATIONALITY<input name="nationality" required maxLength={80} className={fieldClass} /></label>
-            <label className="grid gap-1.5 text-[10px] text-muted-foreground">CREDIT LIMIT (MVR)<input name="creditLimit" inputMode="decimal" required defaultValue="0.00" className={fieldClass} /></label>
+            <CreditReview />
             <label className="grid gap-1.5 text-[10px] text-muted-foreground sm:col-span-2 xl:col-span-3">ADDRESS<textarea name="address" maxLength={500} rows={3} className="rounded-lg border border-border bg-background p-3 text-xs outline-none" /></label>
             <button type="submit" className="h-10 rounded-lg bg-primary px-4 text-xs font-semibold text-primary-foreground sm:w-fit">Create customer</button>
-          </form>
+          </MutationForm>
         </details>
       ) : null}
 

@@ -1,9 +1,10 @@
 "use server";
+import { mutateOnce, requestKey, MutationError } from "@/lib/pos/mutation";
 
 import { revalidatePath } from "next/cache";
 import { getRegisterRedirect } from "@/lib/register-navigation";
 
-import { getAuditRequestContext, safeWriteAudit } from "@/lib/audit";
+import { getAuditRequestContext, safeWriteAudit, writeAudit } from "@/lib/audit";
 import { eventChanges, parseBillSnapshot, snapshotJson } from "@/lib/pos/bill-revisions";
 import { requireShiftPolicy, type AuthorizationContext } from "@/lib/authorization";
 import { prisma } from "@/lib/db";
@@ -34,6 +35,8 @@ function refreshRegister(registerId: string) {
 }
 
 type PrintedBillClientInput = {
+  requestId?: string;
+  printReason?: string;
   billId?: string | null;
   heldOrderId?: string | null;
   expectedVersion?: number | null;
@@ -71,7 +74,10 @@ export async function printUnpaidBillAction(
     return { ok: false as const, error: "Reload this tracked bill before printing it again." };
   }
   try {
+    if (!input.requestId || !/^[\w-]{16,100}$/.test(input.requestId)) throw new MutationError("Reload before printing.");
     const bill = await trackPrintedBill(prisma, {
+      requestId: input.requestId,
+      printReason: input.printReason,
       shiftId,
       actorId: authorization.user.id,
       actorName: authorization.user.name,
@@ -87,7 +93,7 @@ export async function printUnpaidBillAction(
     refreshBillHistory(registerId, shiftId);
     return { ok: true as const, bill };
   } catch (error) {
-    const message = error instanceof PosError ? error.message : "The unpaid bill could not be tracked.";
+    const message = error instanceof PosError || error instanceof MutationError ? error.message : "The unpaid bill could not be tracked.";
     await auditFailure(authorization, "BILL_TRACK_START", message, { shiftId, registerId });
     return { ok: false as const, error: message };
   }
@@ -131,7 +137,7 @@ export async function generatePaymentLinkAction(
     return { ok: true as const, bill, paymentPath: `/payment/${bill.id}` };
   } catch (error) {
     console.error("Failed to create payment link", error);
-    const message = error instanceof PosError ? error.message : "The payment link could not be created.";
+    const message = error instanceof PosError || error instanceof MutationError ? error.message : "The payment link could not be created.";
     await auditFailure(authorization, "PAYMENT_LINK_CREATED", message, { shiftId, registerId });
     return { ok: false as const, error: message };
   }
@@ -147,6 +153,8 @@ export async function closePaymentLinkBillAction(
     return { ok: false as const, error: "That shift does not belong to this register." };
   }
 
+  const paid = await prisma.bill.findFirst({ where: { id: billId, registerId, registerShiftId: shiftId, status: "PAID", saleId: { not: null } }, select: { saleId: true, receiptNumber: true } });
+  if (paid?.saleId && paid.receiptNumber) return { ok: true as const, receiptId: paid.saleId, receiptNumber: paid.receiptNumber.toString() };
   const bill = await prisma.bill.findFirst({
     where: {
       id: billId,
@@ -182,6 +190,7 @@ export async function closePaymentLinkBillAction(
 
   try {
     const sale = await recordSale(prisma, {
+      requestId: `payment-slip-${billId}`,
       shiftId,
       createdById: authorization.user.id,
       cashierName: authorization.user.name,
@@ -203,7 +212,7 @@ export async function closePaymentLinkBillAction(
       receiptNumber: sale.receiptNumber.toString(),
     };
   } catch (error) {
-    const message = error instanceof PosError ? error.message : "The payment-linked bill could not be closed.";
+    const message = error instanceof PosError || error instanceof MutationError ? error.message : "The payment-linked bill could not be closed.";
     await auditFailure(authorization, "SALE_RECORD", message, { shiftId, registerId, billId, source: "PAYMENT_SLIP" });
     return { ok: false as const, error: message };
   }
@@ -283,7 +292,7 @@ export async function amendPrintedBillAction(
     refreshBillHistory(registerId, shiftId);
     return { ok: true as const, bill };
   } catch (error) {
-    const message = error instanceof PosError ? error.message : "The bill amendment could not be saved.";
+    const message = error instanceof PosError || error instanceof MutationError ? error.message : "The bill amendment could not be saved.";
     return { ok: false as const, error: message };
   }
 }
@@ -323,6 +332,7 @@ export async function checkoutRegisterSaleAction(
   let completedSale: { id: string; receiptNumber: bigint };
   try {
     const sale = await recordSale(prisma, {
+      requestId: requestKey(formData),
       shiftId,
       createdById: authorization.user.id,
       cashierName: authorization.user.name,
@@ -338,7 +348,7 @@ export async function checkoutRegisterSaleAction(
     });
     completedSale = { id: sale.id, receiptNumber: sale.receiptNumber };
   } catch (error) {
-    const message = error instanceof PosError ? error.message : "The sale could not be recorded.";
+    const message = error instanceof PosError || error instanceof MutationError ? error.message : "The sale could not be recorded.";
     await auditFailure(authorization, "SALE_RECORD", message, { shiftId, registerId });
     registerRedirect(registerId, "error", message);
   }
@@ -368,6 +378,7 @@ export async function holdRegisterOrderAction(
 
   try {
     await holdRegisterOrder(prisma, {
+      requestId: requestKey(formData),
       shiftId,
       createdById: authorization.user.id,
       actorName: authorization.user.name,
@@ -382,7 +393,7 @@ export async function holdRegisterOrderAction(
       },
     });
   } catch (error) {
-    const message = error instanceof PosError ? error.message : "The order could not be held.";
+    const message = error instanceof PosError || error instanceof MutationError ? error.message : "The order could not be held.";
     await auditFailure(authorization, "REGISTER_ORDER_HOLD", message, { shiftId, registerId });
     registerRedirect(registerId, "error", message);
   }
@@ -414,6 +425,7 @@ export async function creditRegisterBillAction(
   let creditBill: { id: string; customerId: string; totalLaari: number };
   try {
     creditBill = await issueCustomerCredit(prisma, {
+      requestId: requestKey(formData),
       shiftId,
       customerId,
       createdById: authorization.user.id,
@@ -426,7 +438,7 @@ export async function creditRegisterBillAction(
       },
     });
   } catch (error) {
-    const message = error instanceof PosError ? error.message : "The credit bill could not be held.";
+    const message = error instanceof PosError || error instanceof MutationError ? error.message : "The credit bill could not be held.";
     await auditFailure(authorization, "CUSTOMER_CREDIT_ISSUE", message, { shiftId, registerId, customerId });
     registerRedirect(registerId, "error", message);
   }
@@ -445,6 +457,7 @@ export async function cancelHeldOrderAction(
   shiftId: string,
   registerId: string,
   heldOrderId: string,
+  formData: FormData,
 ) {
   const registerRedirect: Awaited<ReturnType<typeof getRegisterRedirect>> = await getRegisterRedirect();
   const { authorization, shift } = await requireShiftPolicy("REGISTER_ORDER_CANCEL", shiftId);
@@ -452,10 +465,13 @@ export async function cancelHeldOrderAction(
   if (!heldOrderId) registerRedirect(registerId, "error", "Select a held bill to cancel.");
 
   try {
-    await prisma.$transaction(async (tx) => {
+    const reason = String(formData.get("cancellationReason") ?? "").trim();
+    if (reason.length < 5 || reason.length > 500) throw new MutationError("Give a cancellation reason (5–500 characters).");
+    const request = await getAuditRequestContext();
+    await mutateOnce(prisma, `cancel:${authorization.user.id}:${heldOrderId}`, requestKey(formData), { shiftId, reason }, async (tx) => {
       const order = await tx.registerOrder.findFirst({
         where: { id: heldOrderId, registerShiftId: shiftId, status: "HELD" },
-        select: { id: true, bill: { select: {
+        select: { id: true, totalLaari: true, items: true, customerNote: true, restaurantTableId: true, bill: { select: {
           id: true, version: true, status: true, items: true, subtotalLaari: true, totalLaari: true, additionalCosts: true,
           paymentMethod: true, customerNote: true, restaurantTableId: true, restaurantTableName: true,
         } } },
@@ -491,27 +507,21 @@ export async function cancelHeldOrderAction(
               kind: "CANCELLATION",
               actorId: authorization.user.id,
               actorName: authorization.user.name,
-              changes: eventChanges("CANCELLATION", snapshot),
+              changes: [...eventChanges("CANCELLATION", snapshot), `Reason: ${reason}`],
               snapshot: snapshotJson(snapshot),
             } },
           },
         });
       }
-    }, { isolationLevel: "Serializable" });
-    await safeWriteAudit({
-      outcome: "SUCCESS",
-      event: "REGISTER_ORDER_CANCEL",
-      page: "REGISTERS",
-      actorId: authorization.user.id,
-      actorLabel: actorLabel(authorization),
-      targetType: "register_order",
-      targetId: heldOrderId,
-      summary: "Held register bill cancelled.",
-      metadata: { shiftId, registerId },
-      request: await getAuditRequestContext(),
+      await writeAudit(tx, {
+        outcome: "SUCCESS", event: "REGISTER_ORDER_CANCEL", page: "REGISTERS", actorId: authorization.user.id,
+        actorLabel: actorLabel(authorization), targetType: "register_order", targetId: heldOrderId,
+        summary: "Held register bill cancelled.",
+        metadata: { shiftId, registerId, reason, totalLaari: order.totalLaari, items: order.items, customerNote: order.customerNote, restaurantTableId: order.restaurantTableId }, request,
+      });
     });
   } catch (error) {
-    const message = error instanceof PosError ? error.message : "The held bill could not be cancelled.";
+    const message = error instanceof PosError || error instanceof MutationError ? error.message : "The held bill could not be cancelled.";
     await auditFailure(authorization, "REGISTER_ORDER_CANCEL", message, { shiftId, registerId, heldOrderId });
     registerRedirect(registerId, "error", message);
   }

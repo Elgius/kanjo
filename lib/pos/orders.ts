@@ -1,3 +1,4 @@
+import { mutateOnce } from "@/lib/pos/mutation";
 import type { PrismaClient } from "@/generated/prisma/client";
 import { auditCreateData, type AuditRequestContext } from "@/lib/audit-core";
 import { additionalBillCostsJson, calculateAdditionalBillCosts } from "@/lib/pos/additional-bill-costs";
@@ -8,6 +9,7 @@ import { PosError } from "@/lib/pos/sales";
 type HeldOrderItem = { itemId: string; quantity: number };
 
 export type HoldRegisterOrderInput = {
+  requestId?: string;
   shiftId: string;
   createdById: string;
   actorName?: string;
@@ -34,7 +36,7 @@ function combineItems(items: HoldRegisterOrderInput["items"]) {
 export async function holdRegisterOrder(db: PrismaClient, input: HoldRegisterOrderInput) {
   const items = combineItems(input.items);
 
-  return db.$transaction(async (tx) => {
+  return mutateOnce(db, `hold:${input.createdById}:${input.shiftId}`, input.requestId, { ...input, audit: undefined }, async (tx) => {
     const shift = await tx.registerShift.findFirst({
       where: { id: input.shiftId, status: "OPEN" },
       select: { id: true, registerId: true, register: { select: { purpose: true } } },
@@ -260,5 +262,5 @@ export async function holdRegisterOrder(db: PrismaClient, input: HoldRegisterOrd
     });
 
     return order;
-  }, { isolationLevel: "Serializable" });
+  });
 }

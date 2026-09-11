@@ -1,4 +1,5 @@
 "use server";
+import { mutateOnce, requestKey, MutationError } from "@/lib/pos/mutation";
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
@@ -9,6 +10,7 @@ import {
   requireGlobalOperation,
   type AuthorizationContext,
 } from "@/lib/authorization";
+import { creditReviewError, normalizeCustomerName } from "@/lib/pos/safeguards";
 import { prisma } from "@/lib/db";
 import { settleCustomerCredit } from "@/lib/pos/customers";
 import { PosError } from "@/lib/pos/sales";
@@ -33,8 +35,20 @@ export async function createCustomerAction(formData: FormData) {
   if (!parsed.ok) customerRedirect("/customers", "error", parsed.error);
   const request = await getAuditRequestContext();
 
+  let customer;
   try {
-    const customer = await prisma.$transaction(async (tx) => {
+    const reviewReason = String(formData.get("creditLimitReason") ?? "").trim();
+    const reviewError = creditReviewError(parsed.data.creditLimitLaari, formData.get("creditLimitReviewed") === "on", reviewReason);
+    if (reviewError) throw new MutationError(reviewError);
+    customer = await mutateOnce(prisma, `customer:${authorization.user.id}`, requestKey(formData), parsed.data, async (tx) => {
+      const candidates = await tx.customer.findMany({ where: { active: true }, select: { id: true, name: true, email: true, phoneNumber: true } });
+      const matches = candidates.filter(c => normalizeCustomerName(c.name) === normalizeCustomerName(parsed.data.name)
+        || (parsed.data.email && c.email?.toLowerCase() === parsed.data.email.toLowerCase())
+        || (parsed.data.phoneNumber && c.phoneNumber?.replace(/\D/g, "") === parsed.data.phoneNumber.replace(/\D/g, "")));
+      const duplicateReason = String(formData.get("duplicateReason") ?? "").trim();
+      if (matches.length && (formData.get("distinctCustomer") !== "on" || duplicateReason.length < 5)) {
+        throw new MutationError(`Possible duplicate customer: ${matches.map(c => c.name).join(", ")}. Review the existing accounts before creating another.`);
+      }
       const created = await tx.customer.create({ data: parsed.data });
       await writeAudit(tx, {
         outcome: "SUCCESS",
@@ -45,15 +59,12 @@ export async function createCustomerAction(formData: FormData) {
         targetType: "customer",
         targetId: created.id,
         summary: `Customer ${created.name} created.`,
-        metadata: { creditLimitLaari: created.creditLimitLaari },
+        metadata: { creditLimitLaari: created.creditLimitLaari, reviewReason, duplicateReason, matchingCustomerIds: matches.map(c => c.id) },
         request,
       });
       return created;
     });
-    revalidatePath("/customers");
-    revalidatePath("/registers", "layout");
-    customerRedirect(`/customers/${customer.id}`, "success", "Customer created.");
-  } catch {
+  } catch (error) {
     await safeWriteAudit({
       outcome: "FAILURE",
       event: "CUSTOMER_CREATE",
@@ -63,8 +74,11 @@ export async function createCustomerAction(formData: FormData) {
       summary: "The customer could not be created.",
       request,
     });
-    customerRedirect("/customers", "error", "The customer could not be created.");
+    customerRedirect("/customers", "error", error instanceof MutationError ? error.message : "The customer could not be created.");
   }
+  revalidatePath("/customers");
+  revalidatePath("/registers", "layout");
+  customerRedirect(`/customers/${customer.id}`, "success", "Customer created.");
 }
 
 export async function updateCustomerAction(customerId: string, formData: FormData) {
@@ -104,7 +118,7 @@ export async function updateCustomerAction(customerId: string, formData: FormDat
       });
     });
   } catch (error) {
-    const message = error instanceof PosError ? error.message : "The customer could not be updated.";
+    const message = error instanceof PosError || error instanceof MutationError ? error.message : "The customer could not be updated.";
     customerRedirect(`/customers/${customerId}`, "error", message);
   }
 
@@ -119,6 +133,9 @@ export async function updateCustomerCreditLimitAction(customerId: string, formDa
   const creditLimitLaari = parseMvr(formData.get("creditLimit"));
   if (creditLimitLaari === null) customerRedirect(`/customers/${customerId}`, "error", "Enter a valid credit limit.");
   try {
+    const reviewReason = String(formData.get("creditLimitReason") ?? "").trim();
+    const reviewError = creditReviewError(creditLimitLaari, formData.get("creditLimitReviewed") === "on", reviewReason);
+    if (reviewError) throw new MutationError(reviewError);
     const request = await getAuditRequestContext();
     await prisma.$transaction(async (tx) => {
       const before = await tx.customer.findFirst({ where: { id: customerId, active: true }, select: { name: true, creditLimitLaari: true } });
@@ -127,10 +144,10 @@ export async function updateCustomerCreditLimitAction(customerId: string, formDa
       await writeAudit(tx, { outcome: "SUCCESS", event: "CUSTOMER_CREDIT_LIMIT_UPDATE", page: "CUSTOMERS",
         actorId: authorization.user.id, actorLabel: actorLabel(authorization), targetType: "customer",
         targetId: customerId, summary: `Credit limit updated for ${before.name}.`,
-        metadata: { before: before.creditLimitLaari, after: creditLimitLaari }, request });
+        metadata: { before: before.creditLimitLaari, after: creditLimitLaari, reviewReason }, request });
     });
   } catch (error) {
-    customerRedirect(`/customers/${customerId}`, "error", error instanceof PosError ? error.message : "The credit limit could not be updated.");
+    customerRedirect(`/customers/${customerId}`, "error", error instanceof PosError || error instanceof MutationError ? error.message : "The credit limit could not be updated.");
   }
   revalidatePath("/customers"); revalidatePath(`/customers/${customerId}`); revalidatePath("/registers", "layout");
   customerRedirect(`/customers/${customerId}`, "success", "Credit limit updated.");
@@ -159,7 +176,7 @@ export async function settleCustomerCreditAction(
     });
     receiptNumber = sale.receiptNumber;
   } catch (error) {
-    const message = error instanceof PosError ? error.message : "The customer payment could not be recorded.";
+    const message = error instanceof PosError || error instanceof MutationError ? error.message : "The customer payment could not be recorded.";
     await safeWriteAudit({
       outcome: "FAILURE",
       event: "CUSTOMER_CREDIT_SETTLE",
@@ -182,4 +199,20 @@ export async function settleCustomerCreditAction(
   revalidatePath("/");
   revalidatePath("/", "layout");
   customerRedirect(`/customers/${customerId}`, "success", `Receipt #${receiptNumber} recorded.`);
+}
+
+export async function mergeCustomerAction(sourceId: string, formData: FormData) {
+  const authorization = await requireGlobalOperation("CUSTOMER_UPDATE");
+  // Merging moves all credit history, including bills from other registers.
+  if (!authorization.user.isSiteAdmin) customerRedirect(`/customers/${sourceId}`, "error", "A site administrator must review customer merges.");
+  const targetId = String(formData.get("targetId") ?? "");
+  try {
+    if (formData.get("confirmMerge") !== "on") throw new MutationError("Confirm that these accounts belong to the same person.");
+    const { mergeCustomers } = await import("@/lib/pos/customer-merge");
+    await mergeCustomers(prisma, { sourceId, targetId, sourceUpdatedAt: String(formData.get("sourceUpdatedAt")), targetUpdatedAt: String(formData.get("targetUpdatedAt")), reason: String(formData.get("mergeReason") ?? ""), requestId: requestKey(formData), actorId: authorization.user.id, actorLabel: actorLabel(authorization) });
+  } catch (error) {
+    customerRedirect(`/customers/${sourceId}`, "error", error instanceof MutationError ? error.message : "The accounts could not be merged.");
+  }
+  revalidatePath("/customers", "layout"); revalidatePath("/registers", "layout");
+  customerRedirect(`/customers/${targetId}`, "success", "Accounts merged. Credit history retained; source account archived.");
 }
