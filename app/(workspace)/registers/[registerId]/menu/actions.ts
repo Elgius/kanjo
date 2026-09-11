@@ -1,4 +1,5 @@
 "use server";
+import { mutateOnce, requestKey, MutationError } from "@/lib/pos/mutation";
 
 import { Prisma } from "@/generated/prisma/client";
 import { revalidatePath } from "next/cache";
@@ -41,7 +42,7 @@ export async function createMenuItemAction(registerId: string, formData: FormDat
   if (!parsed.ok) menuRedirect(registerId, "error", parsed.error);
   try {
     const request = await getAuditRequestContext();
-    await prisma.$transaction(async (tx) => {
+    await mutateOnce(prisma, `menu:${authorization.user.id}:${registerId}`, requestKey(formData), parsed.data, async (tx) => {
       const item = await tx.menuItem.create({ data: {
         registerId, name: parsed.data.name, category: parsed.data.category,
         retailPriceLaari: parsed.data.retailPriceLaari,
@@ -53,7 +54,7 @@ export async function createMenuItemAction(registerId: string, formData: FormDat
         metadata: { registerId, ingredientCount: parsed.data.ingredients.length }, request });
     });
   } catch (error) {
-    const message = error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002" ? "That menu item name already exists in this register." : "The menu item could not be created.";
+    const message = error instanceof MutationError ? error.message : error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002" ? "That menu item name already exists in this register." : "The menu item could not be created.";
     await safeWriteAudit({ outcome: "FAILURE", event: "MENU_ITEM_CREATE", page: "REGISTERS", actorId: authorization.user.id, actorLabel: authorization.user.email, summary: message });
     menuRedirect(registerId, "error", message);
   }
@@ -81,7 +82,7 @@ export async function updateMenuItemAction(menuItemId: string, registerId: strin
         metadata: { registerId, ingredientCount: parsed.data.ingredients.length }, request: await getAuditRequestContext() });
     });
   } catch (error) {
-    const message = error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002" ? "That menu item name already exists in this register." : "The menu item could not be updated.";
+    const message = error instanceof MutationError ? error.message : error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002" ? "That menu item name already exists in this register." : "The menu item could not be updated.";
     menuRedirect(registerId, "error", message);
   }
   revalidatePath(`/registers/${registerId}/menu`); revalidatePath("/registers");

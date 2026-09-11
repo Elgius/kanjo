@@ -1,3 +1,4 @@
+import { mutateOnce } from "@/lib/pos/mutation";
 import "server-only";
 
 import { Prisma, type PrismaClient } from "@/generated/prisma/client";
@@ -79,6 +80,7 @@ function snapshotItems(lines: readonly PersistedSaleLine[]) {
 export async function issueCustomerCredit(
   db: PrismaClient,
   input: {
+    requestId?: string;
     shiftId: string;
     customerId: string;
     createdById: string;
@@ -88,7 +90,7 @@ export async function issueCustomerCredit(
     audit: { actorLabel: string; request?: AuditRequestContext };
   },
 ) {
-  return db.$transaction(async (tx) => {
+  return mutateOnce(db, `credit:${input.createdById}:${input.shiftId}`, input.requestId, { ...input, audit: undefined }, async (tx) => {
     const [shift, customer] = await Promise.all([
       tx.registerShift.findFirst({
         where: { id: input.shiftId, status: "OPEN" },
@@ -255,7 +257,7 @@ export async function issueCustomerCredit(
       }),
     });
     return creditBill;
-  }, { isolationLevel: "Serializable" });
+  });
 }
 
 export async function settleCustomerCredit(

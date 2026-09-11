@@ -1,12 +1,14 @@
 "use client";
+import { MutationForm } from "@/components/pos/mutation-form";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowRight, ExternalLink, FileCheck2, Minus, Phone, Plus, Printer, Search, X } from "lucide-react";
+import { ArrowRight, ExternalLink, FileCheck2, Minus, Phone, Plus, Search, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { flushSync } from "react-dom";
 import { useFormStatus } from "react-dom";
 
+import { PrintRequestControls } from "@/components/pos/print-request-controls";
 import { printBill, PrintableBillPortal } from "@/components/pos/printable-bill";
 import { PaymentSlipDialog, type PaymentSlipReference } from "@/components/pos/payment-slip-dialog";
 import type { BillStatus } from "@/generated/prisma/enums";
@@ -165,6 +167,7 @@ export function RegisterSaleWorkspace({
   const router = useRouter();
   const canOperate = permissions.sale || permissions.hold || permissions.credit;
   const initialOrder = heldOrders.find((order) => order.id === initialHeldOrderId);
+  const [cancellationReason, setCancellationReason] = useState("");
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("all");
   const [heldOrderId, setHeldOrderId] = useState(initialOrder?.id ?? "");
@@ -368,11 +371,12 @@ export function RegisterSaleWorkspace({
     return () => window.clearTimeout(timer);
   }, [customerNote]);
 
-  async function printUnpaidBill() {
+  async function printUnpaidBill(printReason: string, requestId: string) {
     setTrackingError(null);
     await amendmentQueueRef.current;
     const current = trackedBillRef.current;
     const result = await printUnpaidBillAction(shiftId, registerId, {
+      printReason, requestId,
       billId: current?.id,
       heldOrderId: orderIdRef.current || null,
       expectedVersion: current?.version,
@@ -383,7 +387,7 @@ export function RegisterSaleWorkspace({
     });
     if (!result.ok) {
       setTrackingError(result.error);
-      return;
+      return { ok: false as const, error: result.error };
     }
     const next = { id: result.bill.id, billNumber: result.bill.billNumber, version: result.bill.version };
     trackedBillRef.current = next;
@@ -392,7 +396,7 @@ export function RegisterSaleWorkspace({
       setTrackedBill(next);
       setHeldOrderId(result.bill.orderId);
     });
-    printBill("current");
+    return { ok: true as const, printRequestCount: result.bill.printRequestCount, lastPrintRequestedAt: result.bill.lastPrintRequestedAt };
   }
 
   async function generatePaymentLink() {
@@ -561,10 +565,11 @@ export function RegisterSaleWorkspace({
         </div>
       </div>
 
-      <form
+      <MutationForm
         action={checkoutAction}
         className="flex min-w-0 flex-col overflow-hidden rounded-xl border border-border bg-card"
       >
+        {heldOrderId && permissions.cancel && <label className="grid gap-1 border-b p-3 text-xs">Cancellation reason (required to cancel)<input name="cancellationReason" value={cancellationReason} onChange={e=>setCancellationReason(e.target.value)} maxLength={500} className="h-9 rounded border px-2" /></label>}
         <input type="hidden" name="items" value={serializedItems} />
         <input type="hidden" name="paymentMethod" value={paymentMethod} />
         <input type="hidden" name="heldOrderId" value={heldOrderId} />
@@ -581,9 +586,7 @@ export function RegisterSaleWorkspace({
                 type="submit"
                 formAction={cancelAction}
                 onClick={(event) => {
-                  if (!window.confirm("Cancel this held bill and release its table?")) {
-                    event.preventDefault();
-                  }
+                  if (cancellationReason.trim().length < 5) { event.preventDefault(); setTrackingError("Enter a cancellation reason (at least 5 characters)."); }
                 }}
                 className="h-[30px] rounded-[7px] border border-destructive/30 px-2.5 text-[10px] text-destructive"
               >
@@ -615,19 +618,11 @@ export function RegisterSaleWorkspace({
             >
               <ArrowRight className="size-3.5" aria-hidden="true" />
             </button>
-            <button
-              type="button"
-              onClick={() => void printUnpaidBill()}
-              disabled={!cartLines.length || !permissions.hold}
-              aria-label="Print unpaid bill"
-              title={cartLines.length ? "Print unpaid bill" : "Add an item before printing"}
-              className="flex size-[30px] items-center justify-center rounded-[7px] border border-border text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              <Printer className="size-3.5" aria-hidden="true" />
-            </button>
+
           </div>
         </div>
 
+        <PrintRequestControls billId={trackedBill?.id} onRequest={printUnpaidBill} onPrint={() => printBill("current")} disabled={!cartLines.length || !permissions.hold} label="Print unpaid bill" />
         <div className="flex min-h-[246px] flex-1 flex-col overflow-y-auto px-[18px] pt-2">
           {cartLines.map((item) => (
             <div key={item.id} className="flex min-h-[78px] items-center border-b border-border">
@@ -774,7 +769,7 @@ export function RegisterSaleWorkspace({
             <p className="text-center text-[10px] text-muted-foreground">VIEW ONLY</p>
           ) : null}
         </div>
-      </form>
+      </MutationForm>
 
       <dialog
         ref={paymentDialogRef}

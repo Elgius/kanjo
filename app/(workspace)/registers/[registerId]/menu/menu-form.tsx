@@ -1,4 +1,5 @@
 "use client";
+import { MutationForm } from "@/components/pos/mutation-form";
 
 import { useState } from "react";
 
@@ -17,7 +18,7 @@ export function MenuItemForm({ registerId, products, categories, item }: { regis
     ? item.category
     : null;
   return (
-    <form action={action} className="grid gap-3 rounded-xl border border-border bg-card p-4 sm:grid-cols-2">
+    <MutationForm action={action} className="grid gap-3 rounded-xl border border-border bg-card p-4 sm:grid-cols-2">
       <label className="grid gap-1.5 text-xs">Name<input name="name" defaultValue={item?.name} className={fieldClass} required /></label>
       <label className="grid gap-1.5 text-xs">Category<select name="category" defaultValue={item?.category ?? ""} className={fieldClass} required><option value="" disabled>Select a category</option>{legacyCategory ? <option value={legacyCategory} disabled>{legacyCategory} · no longer configured</option> : null}{categories.map((category) => <option key={category.id} value={category.name}>{category.name}</option>)}</select></label>
       <label className="grid gap-1.5 text-xs sm:col-span-2">Selling price (MVR)<input name="retailPrice" defaultValue={item?.retailPrice ?? "0.00"} inputMode="decimal" className={fieldClass} required /></label>
@@ -37,6 +38,6 @@ export function MenuItemForm({ registerId, products, categories, item }: { regis
         <button type="button" onClick={() => setRows((current) => [...current, { productId: "", servingMultiplier: 1, standalone: false }])} className="h-9 justify-self-start rounded-lg border border-border px-3 text-xs">Add ingredient</button>
       </fieldset>
       <button type="submit" className="h-10 rounded-lg bg-primary px-4 text-xs font-semibold text-primary-foreground sm:col-start-2">{item ? "Save changes" : "Create menu item"}</button>
-    </form>
+    </MutationForm>
   );
 }

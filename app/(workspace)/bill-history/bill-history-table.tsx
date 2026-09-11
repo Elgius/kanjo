@@ -1,9 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Eye, FileCheck2, LoaderCircle, Printer, X } from "lucide-react";
+import { Eye, FileCheck2, LoaderCircle, X } from "lucide-react";
 
 import { PaymentSlipDialog, type PaymentSlipReference } from "@/components/pos/payment-slip-dialog";
+import { PrintRequestControls } from "@/components/pos/print-request-controls";
 import { printBill, PrintableBill, PrintableBillPortal, type PrintableBillProps } from "@/components/pos/printable-bill";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatMvr } from "@/lib/pos/money";
@@ -88,7 +89,7 @@ function BillDialog({ bill, onClose }: { bill: BillHistoryRow; onClose: () => vo
           </section>
         </div>
 
-        <div className="flex justify-end gap-2.5"><button type="button" onClick={() => dialogRef.current?.close()} className="h-10 rounded-lg border border-border px-4 text-xs font-semibold">Close</button><button type="button" onClick={() => printBill("history")} className="flex h-10 items-center gap-2 rounded-lg bg-primary px-4 text-xs font-semibold text-primary-foreground"><Printer className="size-3.5" />Print bill</button></div>
+        <div className="flex justify-end gap-2.5"><button type="button" onClick={() => dialogRef.current?.close()} className="h-10 rounded-lg border border-border px-4 text-xs font-semibold">Close</button><PrintRequestControls billId={bill.id} onPrint={() => printBill("history")} /></div>
         <PrintableBillPortal {...printableBillProps} className="bill-history-print-root pointer-events-none fixed -left-[10000px] top-0" />
       </div>
     </dialog>

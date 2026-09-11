@@ -56,6 +56,7 @@ export default async function RegisterSessionPage({
         details={session.details}
       />
 
+      {session.cashVarianceReason && <p className="rounded-lg border p-4 text-xs">Cash variance explanation: {session.cashVarianceReason}</p>}
       <section className="grid gap-3.5 sm:grid-cols-2 xl:grid-cols-4">
         <MetricCard label="NET SALES" value={formatMvr(session.metrics.completedSalesLaari)} note="Completed" dark />
         <MetricCard label="TRANSACTIONS" value={session.metrics.completedTransactions.toLocaleString("en-MV")} note="Completed" />

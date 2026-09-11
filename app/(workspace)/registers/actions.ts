@@ -1,9 +1,12 @@
 "use server";
+import { mutateOnce, requestKey, MutationError } from "@/lib/pos/mutation";
 
 import { Prisma } from "@/generated/prisma/client";
 import { revalidatePath } from "next/cache";
 import { getRegisterRedirect } from "@/lib/register-navigation";
 
+import { cashVarianceThreshold } from "@/lib/pos/safeguards";
+import { parseMvr } from "@/lib/pos/money";
 import { prisma } from "@/lib/db";
 import { getAuditRequestContext, safeWriteAudit, writeAudit } from "@/lib/audit";
 import {
@@ -91,7 +94,7 @@ export async function createRegisterAction(formData: FormData) {
       return created;
     });
   } catch (error) {
-    const message = error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002"
+    const message = error instanceof MutationError ? error.message : error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002"
       ? "That register name already exists."
       : "The register could not be created.";
     await auditFailure(authorization, "REGISTER_CREATE", message, parsed.data);
@@ -113,7 +116,7 @@ export async function openShiftAction(registerId: string, formData: FormData) {
 
   try {
     const request = await getAuditRequestContext();
-    await prisma.$transaction(async (tx) => {
+    await mutateOnce(prisma, `open:${authorization.user.id}:${registerId}`, requestKey(formData), { ...parsed.data }, async (tx) => {
       const shift = await tx.registerShift.create({
         data: { registerId, openedById: authorization.user.id, openingCashLaari: parsed.data.openingCashLaari },
       });
@@ -131,7 +134,7 @@ export async function openShiftAction(registerId: string, formData: FormData) {
       });
     });
   } catch (error) {
-    const message = error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002"
+    const message = error instanceof MutationError ? error.message : error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002"
       ? "This register already has an open shift."
       : "The shift could not be opened.";
     await auditFailure(authorization, "SHIFT_OPEN", message, { registerId });
@@ -154,7 +157,14 @@ export async function closeShiftAction(shiftId: string, registerId: string, form
 
   try {
     const request = await getAuditRequestContext();
-    await prisma.$transaction(async (tx) => {
+    await mutateOnce(prisma, `close:${authorization.user.id}:${registerId}`, requestKey(formData), { ...parsed.data, shiftId, reviewedExpectedCash: formData.get("reviewedExpectedCash"), cashVarianceReason: formData.get("cashVarianceReason") }, async (tx) => {
+      const current = await tx.registerShift.findUnique({ where: { id: shiftId }, select: { openingCashLaari: true } });
+      const cash = await tx.sale.aggregate({ where: { registerShiftId: shiftId, status: "COMPLETED", paymentMethod: "CASH" }, _sum: { totalLaari: true } });
+      const expectedCashLaari = (current?.openingCashLaari ?? 0) + (cash._sum.totalLaari ?? 0);
+      if (formData.get("reviewedExpectedCash") !== String(expectedCashLaari)) throw new PosError("The cash balance changed or has not been reviewed. Review your cash count again.");
+      const cashVarianceLaari = parsed.data.closingCashLaari - expectedCashLaari;
+      const cashVarianceReason = String(formData.get("cashVarianceReason") ?? "").trim();
+      if (cashVarianceReason.length > 500 || (Math.abs(cashVarianceLaari) > cashVarianceThreshold() && cashVarianceReason.length < 5)) throw new PosError("Explain the cash difference (5–500 characters) before closing.");
       const heldOrderCount = await tx.registerOrder.count({
         where: { registerShiftId: shiftId, status: "HELD" },
       });
@@ -166,6 +176,7 @@ export async function closeShiftAction(shiftId: string, registerId: string, form
       const updated = await tx.registerShift.updateMany({
         where: { id: shiftId, registerId, status: "OPEN" },
         data: {
+          expectedCashLaari, cashVarianceLaari, cashVarianceReason: cashVarianceReason || null,
           status: "CLOSED",
           closedById: authorization.user.id,
           closingCashLaari: parsed.data.closingCashLaari,
@@ -182,12 +193,12 @@ export async function closeShiftAction(shiftId: string, registerId: string, form
         targetType: "register_shift",
         targetId: shiftId,
         summary: "Register shift closed.",
-        metadata: { registerId, closingCashLaari: parsed.data.closingCashLaari },
+        metadata: { registerId, closingCashLaari: parsed.data.closingCashLaari, expectedCashLaari, cashVarianceLaari, cashVarianceReason },
         request,
       });
     });
   } catch (error) {
-    const message = error instanceof PosError ? error.message : "The shift could not be closed.";
+    const message = error instanceof PosError || error instanceof MutationError ? error.message : "The shift could not be closed.";
     await auditFailure(authorization, "SHIFT_CLOSE", message, { shiftId, registerId });
     registersRedirect("error", message, registerId);
   }
@@ -209,6 +220,7 @@ export async function recordSaleAction(shiftId: string, registerId: string, form
   let completedSale: { id: string; receiptNumber: bigint };
   try {
     const sale = await recordSale(prisma, {
+      requestId: requestKey(formData),
       shiftId,
       createdById: authorization.user.id,
       cashierName: authorization.user.name,
@@ -221,7 +233,7 @@ export async function recordSaleAction(shiftId: string, registerId: string, form
     });
     completedSale = { id: sale.id, receiptNumber: sale.receiptNumber };
   } catch (error) {
-    const message = error instanceof PosError ? error.message : "The sale could not be recorded.";
+    const message = error instanceof PosError || error instanceof MutationError ? error.message : "The sale could not be recorded.";
     await auditFailure(authorization, "SALE_RECORD", message, { shiftId, registerId });
     registersRedirect("error", message, registerId);
   }
@@ -233,4 +245,18 @@ export async function recordSaleAction(shiftId: string, registerId: string, form
   });
   const result = await getRegisterRedirect();
   result(registerId, "success", params.get("success") ?? "Sale recorded.", Object.fromEntries(params));
+}
+
+export async function reviewClosingCashAction(shiftId: string, registerId: string, count: string) {
+  const { shift } = await requireShiftPolicy("SHIFT_CLOSE", shiftId);
+  if (shift.registerId !== registerId) return { ok: false as const, error: "That shift does not belong to this register." };
+  const counted = parseMvr(count);
+  if (counted === null || counted > 2147483647) return { ok: false as const, error: "Enter a valid cash count." };
+  const current = await prisma.registerShift.findUnique({ where: { id: shiftId } });
+  if (!current || current.status !== "OPEN") return { ok: false as const, error: "That shift is no longer open." };
+  const held = await prisma.registerOrder.count({ where: { registerShiftId: shiftId, status: "HELD" } });
+  if (held) return { ok: false as const, error: "Held bills remain. Reload and resolve them before closing." };
+  const cash = await prisma.sale.aggregate({ where: { registerShiftId: shiftId, status: "COMPLETED", paymentMethod: "CASH" }, _sum: { totalLaari: true } });
+  const expectedCashLaari = current.openingCashLaari + (cash._sum.totalLaari ?? 0);
+  return { ok: true as const, expectedCashLaari, varianceLaari: counted - expectedCashLaari, thresholdLaari: cashVarianceThreshold() };
 }

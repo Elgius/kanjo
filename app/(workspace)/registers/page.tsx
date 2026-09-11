@@ -1,3 +1,4 @@
+import { MutationForm } from "@/components/pos/mutation-form";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
@@ -15,7 +16,6 @@ import { getRegistersData } from "@/lib/pos/queries";
 import { cn } from "@/lib/utils";
 import { authorizedRegisterIds, can, canAccessRegister, requireCapability } from "@/lib/authorization";
 import {
-  closeShiftAction,
   openShiftAction,
   recordSaleAction,
 } from "./actions";
@@ -115,15 +115,12 @@ export default async function RegistersPage({ searchParams }: PageProps<"/regist
                 <div className="flex flex-wrap items-end gap-2">
                 {selected.purpose === "RESTAURANT" ? <Link prefetch={false} href={`/registers/${selected.id}/menu`} className="flex h-10 items-center rounded-lg border border-border bg-card px-4 text-xs font-semibold">Menu</Link> : null}
                 {shift && can(authorization, "SHIFT_CLOSE") && (shift.openedBy.id === authorization.user.id || can(authorization, "SHIFT_OVERRIDE")) ? (
-                  <form action={closeShiftAction.bind(null, shift.id, selected.id)} className="flex items-end gap-2">
-                    <label className="grid gap-1 text-[10px] text-muted-foreground">Closing cash (MVR)<input name="closingCash" inputMode="decimal" defaultValue={(selectedCashExpectedLaari / 100).toFixed(2)} className={`${fieldClass} w-32`} required /></label>
-                    <button type="submit" className="h-10 rounded-lg bg-primary px-3 text-[11px] font-semibold text-primary-foreground">Close shift</button>
-                  </form>
+                  <Link href={`/registers/${selected.id}`} className="flex h-10 items-center rounded-lg bg-primary px-3 text-xs text-primary-foreground">Review and close shift</Link>
                 ) : can(authorization, "SHIFT_OPEN") ? (
-                  <form action={openShiftAction.bind(null, selected.id)} className="flex items-end gap-2">
+                  <MutationForm action={openShiftAction.bind(null, selected.id)} className="flex items-end gap-2">
                     <label className="grid gap-1 text-[10px] text-muted-foreground">Opening cash (MVR)<input name="openingCash" inputMode="decimal" defaultValue="0.00" className={`${fieldClass} w-32`} required /></label>
                     <button type="submit" className="h-10 rounded-lg bg-primary px-3 text-[11px] font-semibold text-primary-foreground">Open shift</button>
-                  </form>
+                  </MutationForm>
                 ) : <span className="rounded-lg bg-accent px-3 py-2 text-[10px] text-muted-foreground">VIEW ONLY</span>}
                 </div>
               </div>
@@ -136,12 +133,12 @@ export default async function RegistersPage({ searchParams }: PageProps<"/regist
                     ))}
                   </div>
 
-                  {can(authorization, "SALE_RECORD") && (shift.openedBy.id === authorization.user.id || can(authorization, "SHIFT_OVERRIDE")) ? <form action={recordSaleAction.bind(null, shift.id, selected.id)} className="grid gap-3 rounded-[9px] bg-accent p-4 sm:grid-cols-2 sm:items-end lg:grid-cols-[minmax(0,1fr)_100px_150px] 2xl:grid-cols-[minmax(0,1fr)_100px_150px_auto]">
+                  {can(authorization, "SALE_RECORD") && (shift.openedBy.id === authorization.user.id || can(authorization, "SHIFT_OVERRIDE")) ? <MutationForm action={recordSaleAction.bind(null, shift.id, selected.id)} className="grid gap-3 rounded-[9px] bg-accent p-4 sm:grid-cols-2 sm:items-end lg:grid-cols-[minmax(0,1fr)_100px_150px] 2xl:grid-cols-[minmax(0,1fr)_100px_150px_auto]">
                     <label className="grid min-w-0 gap-1.5 text-[10px] text-muted-foreground">{selected.purpose === "RESTAURANT" ? "MENU ITEM" : "PRODUCT"}<select name="itemId" className={`${fieldClass} min-w-0 w-full`} required defaultValue=""><option value="" disabled>{selected.purpose === "RESTAURANT" ? "Select menu item" : "Select product"}</option>{data.products.map((product) => <option key={product.id} value={product.id} disabled={product.stockQuantity < 1}>{product.name} · {product.stockQuantity < 1 ? `SOLD OUT${product.soldOutReason ? ` · ${product.soldOutReason}` : ""}` : `${product.stockQuantity} available`} · {formatMvr(product.retailPriceLaari)}</option>)}</select></label>
                     <label className="grid gap-1.5 text-[10px] text-muted-foreground">QUANTITY<input name="quantity" type="number" min="1" defaultValue="1" className={fieldClass} required /></label>
                     <label className="grid gap-1.5 text-[10px] text-muted-foreground">PAYMENT<select name="paymentMethod" className={fieldClass} defaultValue="CASH"><option value="CASH">Cash</option><option value="CARD">Card</option><option value="MOBILE">Mobile pay</option></select></label>
                     <button type="submit" disabled={!data.products.some((product) => product.stockQuantity > 0)} className="h-10 rounded-lg bg-primary px-4 text-xs font-semibold text-primary-foreground disabled:opacity-50 sm:col-span-2 lg:col-span-3 2xl:col-span-1">Record sale</button>
-                  </form> : null}
+                  </MutationForm> : null}
 
                   <div className="min-w-0">
                     <h3 className="pb-2.5 text-sm font-semibold">Recent transactions</h3>
