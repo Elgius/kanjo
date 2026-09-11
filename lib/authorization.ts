@@ -8,95 +8,21 @@ import type {
   CapabilityKey,
   PageKey,
   PermissionLevel,
-  RegisterScopeMode,
 } from "@/generated/prisma/enums";
 import { safeWriteAudit, getAuditRequestContext } from "@/lib/audit";
-import { auth } from "@/lib/auth";
+import { getAuthorizationFromHeaders, type AuthorizationContext } from "@/lib/auth-context";
+import { resolveLandingPath } from "@/lib/landing";
 import { prisma } from "@/lib/db";
 import type { OperationEvent } from "@/lib/operation-policies";
 import { operationPolicy } from "@/lib/operation-policies";
 import {
   CAPABILITY_BY_KEY,
   capabilityAllows,
-  capabilitiesFromLegacyPermissions,
-  PAGE_DEFINITIONS,
-  PAGE_KEYS,
   registerScopeAllows,
 } from "@/lib/permissions";
 
-export type AuthorizationContext = {
-  user: {
-    id: string;
-    name: string;
-    email: string;
-    username: string | null;
-    isSiteAdmin: boolean;
-    roleId: string;
-    roleName: string;
-  };
-  capabilities: ReadonlySet<CapabilityKey>;
-  registerScopeMode: RegisterScopeMode;
-  registerIds: ReadonlySet<string>;
-  /** Kept during the additive rollout for rollback diagnostics only. */
-  permissions: Record<PageKey, PermissionLevel>;
-};
-
-export const getAuthorization = cache(async (): Promise<AuthorizationContext | null> => {
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) return null;
-
-  const user = await prisma.user.findUnique({
-    where: { id: session.user.id },
-    select: {
-      id: true,
-      name: true,
-      email: true,
-      username: true,
-      isSiteAdmin: true,
-      roleId: true,
-      role: {
-        select: {
-          name: true,
-          registerScopeMode: true,
-          permissions: { select: { page: true, level: true } },
-          capabilities: { select: { capability: true } },
-          registerAccess: { select: { registerId: true } },
-        },
-      },
-    },
-  });
-  if (!user) return null;
-
-  const permissions = Object.fromEntries(PAGE_KEYS.map((page) => [page, "NONE"])) as Record<
-    PageKey,
-    PermissionLevel
-  >;
-  for (const permission of user.role.permissions) permissions[permission.page] = permission.level;
-
-  // This fallback protects rolling deploys while the additive migration is being applied.
-  const storedCapabilities = user.role.capabilities.map(({ capability }) => capability);
-  const capabilities = new Set(
-    storedCapabilities.length
-      ? storedCapabilities
-      : capabilitiesFromLegacyPermissions(user.role.permissions),
-  );
-
-  return {
-    user: {
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      username: user.username,
-      isSiteAdmin: user.isSiteAdmin,
-      roleId: user.roleId,
-      roleName: user.role.name,
-    },
-    capabilities,
-    registerScopeMode: user.role.registerScopeMode,
-    registerIds: new Set(user.role.registerAccess.map(({ registerId }) => registerId)),
-    permissions,
-  };
-});
+export type { AuthorizationContext } from "@/lib/auth-context";
+export const getAuthorization = cache(async () => getAuthorizationFromHeaders(await headers()));
 
 export function can(authorization: AuthorizationContext, capability: CapabilityKey) {
   return capabilityAllows(authorization.user.isSiteAdmin, authorization.capabilities, capability);
@@ -132,7 +58,7 @@ export function canAccess(
 }
 
 export function firstAccessiblePath(authorization: AuthorizationContext) {
-  return PAGE_DEFINITIONS.find((page) => canAccess(authorization, page.key))?.href ?? null;
+  return resolveLandingPath(authorization);
 }
 
 export async function requireAuthorization() {
@@ -173,7 +99,7 @@ async function deny(
     metadata: { requiredCapability: capability, ...metadata },
     request: await getAuditRequestContext(),
   });
-  redirect(authorization ? deniedPath[page] : "/login");
+  redirect(authorization ? (capability === "REGISTERS_VIEW" ? "/access-denied" : deniedPath[page]) : "/login");
 }
 
 export async function requireCapability(capability: CapabilityKey, event: string) {

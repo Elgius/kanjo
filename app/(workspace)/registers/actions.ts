@@ -2,7 +2,7 @@
 
 import { Prisma } from "@/generated/prisma/client";
 import { revalidatePath } from "next/cache";
-import { redirect } from "next/navigation";
+import { getRegisterRedirect } from "@/lib/register-navigation";
 
 import { prisma } from "@/lib/db";
 import { getAuditRequestContext, safeWriteAudit, writeAudit } from "@/lib/audit";
@@ -21,14 +21,13 @@ import {
   parseSaleForm,
 } from "@/lib/pos/validation";
 
-function registersRedirect(kind: "success" | "error", message: string, registerId?: string): never {
-  const params = new URLSearchParams({ [kind]: message });
-  redirect(registerId
-    ? `/registers/${registerId}?${params.toString()}`
-    : `/registers?${params.toString()}`);
+async function getRegistersRedirect() {
+  const result = await getRegisterRedirect();
+  return (kind: "success" | "error", message: string, registerId?: string): never => result(registerId, kind, message);
 }
 
 function refreshRegisters(registerId?: string) {
+  revalidatePath("/live_register", "layout");
   revalidatePath("/registers");
   if (registerId) {
     revalidatePath(`/registers/${registerId}`);
@@ -64,6 +63,7 @@ async function auditFailure(
 }
 
 export async function createRegisterAction(formData: FormData) {
+  const registersRedirect: Awaited<ReturnType<typeof getRegistersRedirect>> = await getRegistersRedirect();
   const authorization = await requireGlobalOperation("REGISTER_CREATE");
   const parsed = parseRegisterForm(formData);
   if (!parsed.ok) {
@@ -103,6 +103,7 @@ export async function createRegisterAction(formData: FormData) {
 }
 
 export async function openShiftAction(registerId: string, formData: FormData) {
+  const registersRedirect: Awaited<ReturnType<typeof getRegistersRedirect>> = await getRegistersRedirect();
   const authorization = await requireRegisterOperation("SHIFT_OPEN", registerId);
   const parsed = parseOpeningCash(formData);
   if (!parsed.ok) {
@@ -142,6 +143,7 @@ export async function openShiftAction(registerId: string, formData: FormData) {
 }
 
 export async function closeShiftAction(shiftId: string, registerId: string, formData: FormData) {
+  const registersRedirect: Awaited<ReturnType<typeof getRegistersRedirect>> = await getRegistersRedirect();
   const { authorization, shift } = await requireShiftPolicy("SHIFT_CLOSE", shiftId);
   if (shift.registerId !== registerId) registersRedirect("error", "That shift does not belong to this register.", shift.registerId);
   const parsed = parseClosingCash(formData);
@@ -195,6 +197,7 @@ export async function closeShiftAction(shiftId: string, registerId: string, form
 }
 
 export async function recordSaleAction(shiftId: string, registerId: string, formData: FormData) {
+  const registersRedirect: Awaited<ReturnType<typeof getRegistersRedirect>> = await getRegistersRedirect();
   const { authorization, shift } = await requireShiftPolicy("SALE_RECORD", shiftId);
   if (shift.registerId !== registerId) registersRedirect("error", "That shift does not belong to this register.", shift.registerId);
   const parsed = parseSaleForm(formData);
@@ -228,5 +231,6 @@ export async function recordSaleAction(shiftId: string, registerId: string, form
     success: `Receipt #${completedSale.receiptNumber} recorded.`,
     receipt: completedSale.id,
   });
-  redirect(`/registers/${registerId}?${params.toString()}`);
+  const result = await getRegisterRedirect();
+  result(registerId, "success", params.get("success") ?? "Sale recorded.", Object.fromEntries(params));
 }

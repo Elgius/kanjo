@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { redirect } from "next/navigation";
+import { getRegisterRedirect } from "@/lib/register-navigation";
 
 import { getAuditRequestContext, safeWriteAudit } from "@/lib/audit";
 import { eventChanges, parseBillSnapshot, snapshotJson } from "@/lib/pos/bill-revisions";
@@ -20,17 +20,8 @@ function actorLabel(authorization: AuthorizationContext) {
   return authorization.user.username ?? authorization.user.email;
 }
 
-function registerRedirect(
-  registerId: string,
-  kind: "success" | "error",
-  message: string,
-  extra?: Record<string, string>,
-): never {
-  const params = new URLSearchParams({ [kind]: message, ...extra });
-  redirect(`/registers/${registerId}?${params.toString()}`);
-}
-
 function refreshRegister(registerId: string) {
+  revalidatePath("/live_register", "layout");
   revalidatePath(`/registers/${registerId}`);
   revalidatePath(`/registers/${registerId}/restaurant`);
   revalidatePath("/registers");
@@ -320,6 +311,7 @@ export async function checkoutRegisterSaleAction(
   registerId: string,
   formData: FormData,
 ) {
+  const registerRedirect: Awaited<ReturnType<typeof getRegisterRedirect>> = await getRegisterRedirect();
   const { authorization, shift } = await requireShiftPolicy("SALE_RECORD", shiftId);
   if (shift.registerId !== registerId) registerRedirect(shift.registerId, "error", "That shift does not belong to this register.");
   const parsed = parseRegisterCartForm(formData);
@@ -365,6 +357,7 @@ export async function holdRegisterOrderAction(
   registerId: string,
   formData: FormData,
 ) {
+  const registerRedirect: Awaited<ReturnType<typeof getRegisterRedirect>> = await getRegisterRedirect();
   const { authorization, shift } = await requireShiftPolicy("REGISTER_ORDER_HOLD", shiftId);
   if (shift.registerId !== registerId) registerRedirect(shift.registerId, "error", "That shift does not belong to this register.");
   const parsed = parseRegisterCartForm(formData);
@@ -403,6 +396,7 @@ export async function creditRegisterBillAction(
   registerId: string,
   formData: FormData,
 ) {
+  const registerRedirect: Awaited<ReturnType<typeof getRegisterRedirect>> = await getRegisterRedirect();
   const { authorization, shift } = await requireShiftPolicy("CUSTOMER_CREDIT_ISSUE", shiftId);
   if (shift.registerId !== registerId) registerRedirect(shift.registerId, "error", "That shift does not belong to this register.");
   const parsed = parseRegisterCartForm(formData);
@@ -452,6 +446,7 @@ export async function cancelHeldOrderAction(
   registerId: string,
   heldOrderId: string,
 ) {
+  const registerRedirect: Awaited<ReturnType<typeof getRegisterRedirect>> = await getRegisterRedirect();
   const { authorization, shift } = await requireShiftPolicy("REGISTER_ORDER_CANCEL", shiftId);
   if (shift.registerId !== registerId) registerRedirect(shift.registerId, "error", "That shift does not belong to this register.");
   if (!heldOrderId) registerRedirect(registerId, "error", "Select a held bill to cancel.");

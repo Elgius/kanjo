@@ -11,13 +11,16 @@ import {
   type AuthorizationContext,
 } from "@/lib/authorization";
 import { prisma } from "@/lib/db";
+import { isWorkspace, parseAccountRegisterAssignment } from "@/lib/access-settings";
+import { AccessSettingsError, validateRegisterAssignment } from "@/lib/settings-access";
 import {
   normalizeRoleName,
   PAGE_DEFINITIONS,
   legacyPermissionProjection,
   parseCapabilityValues,
-  parseRegisterScopeMode,
-  validateCapabilitySelection,
+  CAPABILITY_KEYS,
+  capabilitiesFromLegacyPermissions,
+  expandCapabilityDependencies,
   validateRoleName,
   validateUsername,
 } from "@/lib/permissions";
@@ -57,25 +60,18 @@ async function auditFailure(
   });
 }
 
-async function grantsFromForm(formData: FormData) {
-  const scopeMode = parseRegisterScopeMode(formData.get("registerScopeMode"));
-  const registerIds = formData.getAll("registerIds").filter(
-    (value): value is string => typeof value === "string" && Boolean(value),
-  );
-  const validated = validateCapabilitySelection(parseCapabilityValues(formData), scopeMode, registerIds);
-  if (!validated.ok) return validated;
-  if (scopeMode === "SELECTED" && registerIds.length) {
-    const existing = await prisma.cashRegister.count({ where: { id: { in: registerIds } } });
-    if (existing !== new Set(registerIds).size) {
-      return { ok: false as const, error: "One or more selected registers no longer exist." };
-    }
+function grantsFromForm(formData: FormData) {
+  const workspace = formData.get("workspace");
+  if (!isWorkspace(workspace)) return { ok: false as const, error: "Choose a job preset or custom role." };
+  if (formData.getAll("capabilities").some((value) => !CAPABILITY_KEYS.includes(value as typeof CAPABILITY_KEYS[number]))) {
+    return { ok: false as const, error: "One or more permissions are invalid." };
   }
-  const projection = legacyPermissionProjection(validated.capabilities);
+  const capabilities = Array.from(expandCapabilityDependencies(parseCapabilityValues(formData)));
+  const projection = legacyPermissionProjection(capabilities);
   return {
     ok: true as const,
-    scopeMode,
-    registerIds: scopeMode === "SELECTED" ? Array.from(new Set(registerIds)) : [],
-    capabilities: validated.capabilities,
+    workspace,
+    capabilities,
     permissions: PAGE_DEFINITIONS.map(({ key: page }) => ({ page, level: projection[page] })),
   };
 }
@@ -99,10 +95,9 @@ export async function createRoleAction(formData: FormData) {
           name: parsedName.value,
           normalizedName: normalizeRoleName(parsedName.value),
           description,
-          registerScopeMode: grants.scopeMode,
+          workspace: grants.workspace,
           permissions: { create: grants.permissions },
           capabilities: { create: grants.capabilities.map((capability) => ({ capability })) },
-          registerAccess: { create: grants.registerIds.map((registerId) => ({ registerId })) },
         },
         select: { id: true, name: true },
       });
@@ -115,7 +110,7 @@ export async function createRoleAction(formData: FormData) {
         targetType: "role",
         targetId: role.id,
         summary: `Role ${role.name} created.`,
-        metadata: { capabilities: grants.capabilities, registerScopeMode: grants.scopeMode, registerIds: grants.registerIds },
+        metadata: { capabilities: grants.capabilities, workspace: grants.workspace },
         request,
       });
     });
@@ -128,7 +123,7 @@ export async function createRoleAction(formData: FormData) {
     settingsRedirect("/settings/roles", "error", message);
   }
 
-  revalidatePath("/settings", "layout");
+  revalidatePath("/", "layout");
   settingsRedirect("/settings/roles", "success", "Role created.");
 }
 
@@ -150,9 +145,8 @@ export async function updateRoleAction(roleId: string, formData: FormData) {
         where: { id: roleId },
         select: {
           name: true,
-          registerScopeMode: true,
+          workspace: true,
           capabilities: { select: { capability: true } },
-          registerAccess: { select: { registerId: true } },
         },
       });
       const role = await tx.role.update({
@@ -161,10 +155,14 @@ export async function updateRoleAction(roleId: string, formData: FormData) {
           name: parsedName.value,
           normalizedName: normalizeRoleName(parsedName.value),
           description,
-          registerScopeMode: grants.scopeMode,
+          workspace: grants.workspace,
         },
         select: { id: true, name: true },
       });
+      if (grants.capabilities.includes("REGISTER_CREATE_GLOBAL")) {
+        const restrictedUsers = await tx.user.count({ where: { roleId, isSiteAdmin: false, registerScopeMode: "SELECTED" } });
+        if (restrictedUsers) throw new AccessSettingsError("Register creation requires all-register access for every non-admin account assigned to this role. Update their assignments first.");
+      }
       await tx.rolePermission.deleteMany({ where: { roleId } });
       await tx.rolePermission.createMany({
         data: grants.permissions.map((permission) => ({ roleId, ...permission })),
@@ -173,12 +171,6 @@ export async function updateRoleAction(roleId: string, formData: FormData) {
       await tx.roleCapability.createMany({
         data: grants.capabilities.map((capability) => ({ roleId, capability })),
       });
-      await tx.roleRegisterAccess.deleteMany({ where: { roleId } });
-      if (grants.registerIds.length) {
-        await tx.roleRegisterAccess.createMany({
-          data: grants.registerIds.map((registerId) => ({ roleId, registerId })),
-        });
-      }
       await writeAudit(tx, {
         outcome: "SUCCESS",
         event: "ROLE_UPDATE",
@@ -188,20 +180,20 @@ export async function updateRoleAction(roleId: string, formData: FormData) {
         targetType: "role",
         targetId: role.id,
         summary: `Role ${role.name} updated.`,
-        metadata: { before, after: { name: role.name, capabilities: grants.capabilities, registerScopeMode: grants.scopeMode, registerIds: grants.registerIds } },
+        metadata: { before, after: { name: role.name, capabilities: grants.capabilities, workspace: grants.workspace } },
         request,
       });
-    });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   } catch (error) {
     const message =
       error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002"
         ? "A role with that name already exists."
-        : "The role could not be updated.";
+        : error instanceof AccessSettingsError ? error.message : "The role could not be updated.";
     await auditFailure(authorization, "ROLE_UPDATE", message, { roleId });
     settingsRedirect("/settings/roles", "error", message);
   }
 
-  revalidatePath("/settings", "layout");
+  revalidatePath("/", "layout");
   settingsRedirect("/settings/roles", "success", "Role updated.");
 }
 
@@ -244,7 +236,7 @@ export async function deleteRoleAction(roleId: string) {
     settingsRedirect("/settings/roles", "error", message);
   }
 
-  revalidatePath("/settings", "layout");
+  revalidatePath("/", "layout");
   settingsRedirect("/settings/roles", "success", "Role deleted.");
 }
 
@@ -264,20 +256,18 @@ export async function createAccountAction(formData: FormData) {
     settingsRedirect("/settings", "error", message);
   }
   const roleId = String(formData.get("roleId") ?? "");
-  const role = await prisma.role.findUnique({ where: { id: roleId }, select: { id: true, name: true } });
-  if (!role) {
-    const message = "Select an existing role.";
-    await auditFailure(authorization, "ACCOUNT_CREATE", message, {
-      username: parsedUsername.value,
-    });
-    settingsRedirect("/settings", "error", message);
-  }
+  const assignment = parseAccountRegisterAssignment(formData);
+  if (!assignment.ok) settingsRedirect("/settings", "error", assignment.error);
 
   const userId = crypto.randomUUID();
   const request = await getAuditRequestContext();
   try {
     const passwordHash = await hashPassword(password);
     await prisma.$transaction(async (tx) => {
+      const role = await tx.role.findUnique({ where: { id: roleId }, include: { capabilities: true, permissions: true } });
+      if (!role) throw new AccessSettingsError("Select an existing role.");
+      const capabilities = role.capabilities.length ? role.capabilities.map(({ capability }) => capability) : capabilitiesFromLegacyPermissions(role.permissions);
+      const grants = await validateRegisterAssignment(tx, assignment, capabilities);
       await tx.user.create({
         data: {
           id: userId,
@@ -286,6 +276,8 @@ export async function createAccountAction(formData: FormData) {
           displayUsername: parsedUsername.value,
           email: `${parsedUsername.value}@accounts.kanjo.invalid`,
           roleId: role.id,
+          registerScopeMode: grants.scopeMode,
+          registerAccess: { create: grants.registerIds.map((registerId) => ({ registerId })) },
         },
       });
       await tx.account.create({
@@ -306,15 +298,15 @@ export async function createAccountAction(formData: FormData) {
         targetType: "user",
         targetId: userId,
         summary: `Account ${parsedUsername.value} created.`,
-        metadata: { username: parsedUsername.value, roleId: role.id, roleName: role.name },
+        metadata: { username: parsedUsername.value, roleId: role.id, roleName: role.name, registerScopeMode: grants.scopeMode, registerIds: grants.registerIds },
         request,
       });
-    });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   } catch (error) {
     const message =
       error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002"
         ? "That username already exists."
-        : "The account could not be created.";
+        : error instanceof AccessSettingsError ? error.message : "The account could not be created.";
     await auditFailure(authorization, "ACCOUNT_CREATE", message, {
       username: parsedUsername.value,
       roleId,
@@ -430,7 +422,7 @@ export async function updateUsernameAction(userId: string, formData: FormData) {
     settingsRedirect("/settings", "error", message);
   }
 
-  revalidatePath("/settings", "layout");
+  revalidatePath("/", "layout");
   settingsRedirect("/settings", "success", "Username updated.");
 }
 
@@ -502,7 +494,7 @@ export async function resetAccountPasswordAction(userId: string, formData: FormD
     settingsRedirect("/settings", "error", message);
   }
 
-  revalidatePath("/settings", "layout");
+  revalidatePath("/", "layout");
   settingsRedirect("/settings", "success", "Password reset and active sessions revoked.");
 }
 
@@ -550,49 +542,49 @@ export async function deleteAccountAction(userId: string) {
     settingsRedirect("/settings", "error", message);
   }
 
-  revalidatePath("/settings", "layout");
+  revalidatePath("/", "layout");
   settingsRedirect("/settings", "success", "Account deleted.");
 }
 
 export async function assignRoleAction(userId: string, formData: FormData) {
   const authorization = await requireSiteAdminAction("ACCOUNT_ROLE_ASSIGN");
   const roleId = String(formData.get("roleId") ?? "");
+  const assignment = parseAccountRegisterAssignment(formData);
+  if (!assignment.ok) settingsRedirect("/settings", "error", assignment.error);
   const request = await getAuditRequestContext();
   try {
     await prisma.$transaction(async (tx) => {
       const [target, role] = await Promise.all([
         tx.user.findUniqueOrThrow({
           where: { id: userId, accounts: { some: {} } },
-          select: { username: true, email: true, role: { select: { id: true, name: true } } },
+          select: { username: true, email: true, isSiteAdmin: true, registerScopeMode: true, registerAccess: { select: { registerId: true } }, role: { select: { id: true, name: true } } },
         }),
-        tx.role.findUniqueOrThrow({ where: { id: roleId }, select: { id: true, name: true } }),
+        tx.role.findUniqueOrThrow({ where: { id: roleId }, include: { capabilities: true, permissions: true } }),
       ]);
-      await tx.user.update({ where: { id: userId }, data: { roleId: role.id } });
+      const capabilities = role.capabilities.length ? role.capabilities.map(({ capability }) => capability) : capabilitiesFromLegacyPermissions(role.permissions);
+      const grants = await validateRegisterAssignment(tx, assignment, capabilities, target.isSiteAdmin, target.registerAccess.map(({ registerId }) => registerId));
+      await tx.user.update({ where: { id: userId }, data: { roleId: role.id, registerScopeMode: grants.scopeMode } });
+      await tx.userRegisterAccess.deleteMany({ where: { userId } });
+      if (grants.registerIds.length) await tx.userRegisterAccess.createMany({ data: grants.registerIds.map((registerId) => ({ userId, registerId })) });
       await writeAudit(tx, {
-        outcome: "SUCCESS",
-        event: "ACCOUNT_ROLE_ASSIGN",
-        page: "SETTINGS",
-        actorId: authorization.user.id,
-        actorLabel: actorLabel(authorization),
-        targetType: "user",
-        targetId: userId,
-        summary: `${target.username ?? target.email} assigned to ${role.name}.`,
+        outcome: "SUCCESS", event: "ACCOUNT_ROLE_ASSIGN", page: "SETTINGS",
+        actorId: authorization.user.id, actorLabel: actorLabel(authorization),
+        targetType: "user", targetId: userId,
+        summary: `Access updated for ${target.username ?? target.email}.`,
         metadata: {
-          previousRoleId: target.role.id,
-          previousRoleName: target.role.name,
-          roleId: role.id,
-          roleName: role.name,
+          before: { roleId: target.role.id, registerScopeMode: target.registerScopeMode, registerIds: target.registerAccess.map(({ registerId }) => registerId) },
+          after: { roleId: role.id, registerScopeMode: grants.scopeMode, registerIds: grants.registerIds },
         },
         request,
       });
-    });
-  } catch {
-    const message = "The account role could not be changed.";
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  } catch (error) {
+    const message = error instanceof AccessSettingsError ? error.message : "The account access could not be changed. Refresh and try again.";
     await auditFailure(authorization, "ACCOUNT_ROLE_ASSIGN", message, { userId, roleId });
     settingsRedirect("/settings", "error", message);
   }
-  revalidatePath("/settings", "layout");
-  settingsRedirect("/settings", "success", "Account role updated.");
+  revalidatePath("/", "layout");
+  settingsRedirect("/settings", "success", "Account access updated.");
 }
 
 export async function setSiteAdminAction(userId: string, formData: FormData) {
@@ -634,6 +626,6 @@ export async function setSiteAdminAction(userId: string, formData: FormData) {
     await auditFailure(authorization, "SITE_ADMIN_UPDATE", message, { userId, promote });
     settingsRedirect("/settings", "error", message);
   }
-  revalidatePath("/settings", "layout");
+  revalidatePath("/", "layout");
   settingsRedirect("/settings", "success", "Site administrator access updated.");
 }

@@ -145,6 +145,7 @@ export function RegisterSaleWorkspace({
   heldOrders,
   permissions,
   initialHeldOrderId,
+  cashierView = false,
 }: {
   registerId: string;
   registerName: string;
@@ -159,6 +160,7 @@ export function RegisterSaleWorkspace({
   heldOrders: HeldOrder[];
   permissions: { sale: boolean; hold: boolean; cancel: boolean; credit: boolean };
   initialHeldOrderId?: string;
+  cashierView?: boolean;
 }) {
   const router = useRouter();
   const canOperate = permissions.sale || permissions.hold || permissions.credit;
@@ -462,7 +464,7 @@ export function RegisterSaleWorkspace({
           })}
         </nav>
       ) : null}
-      <section className="grid min-h-[606px] gap-3.5 xl:grid-cols-[minmax(0,720px)_minmax(340px,394px)]">
+      <section className="grid min-h-[606px] items-stretch gap-5 xl:grid-cols-[minmax(0,1fr)_390px]">
       <div className="flex min-w-0 flex-col gap-4 rounded-xl border border-border bg-card p-[18px]">
         <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
           <div className="flex flex-col gap-[3px]">
@@ -751,6 +753,8 @@ export function RegisterSaleWorkspace({
                   })}
                 </select>
               </label>
+            ) : cashierView ? (
+              <p className="text-xs text-muted-foreground">Ask your manager to set up tables before holding a restaurant bill.</p>
             ) : (
               <Link href={`/registers/${registerId}/restaurant`} className="flex h-10 items-center justify-center rounded-lg border border-chart-1/40 bg-chart-1/10 px-3 text-[11px] font-semibold text-chart-1">
                 Set up restaurant tables before holding a bill

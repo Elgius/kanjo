@@ -36,8 +36,8 @@ async function main() {
   });
   const actor = await prisma.user.upsert({
     where: { email: seedUser.email },
-    update: { name: seedUser.name, roleId: fullAccessRole.id },
-    create: { ...seedUser, roleId: fullAccessRole.id },
+    update: { name: seedUser.name, roleId: fullAccessRole.id, registerScopeMode: "ALL" },
+    create: { ...seedUser, roleId: fullAccessRole.id, registerScopeMode: "ALL" },
     select: { id: true },
   });
 

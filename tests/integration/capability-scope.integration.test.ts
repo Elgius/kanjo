@@ -50,7 +50,7 @@ databaseDescribe("capability register scope", () => {
       productIds.push(product.id);
       await db.registerShift.create({ data: { registerId: register.id, openedById: userId } });
     }
-    await db.roleRegisterAccess.create({ data: { roleId, registerId: registerIds[0] } });
+    await db.userRegisterAccess.create({ data: { userId, registerId: registerIds[0] } });
   });
 
   afterAll(async () => {
@@ -72,8 +72,8 @@ databaseDescribe("capability register scope", () => {
     expect(sessions.registers.every((register) => register.id === registerIds[0])).toBe(true);
   });
 
-  test("selected-register roles do not inherit a later register", async () => {
-    const access = await db.roleRegisterAccess.findMany({ where: { roleId }, select: { registerId: true } });
+  test("selected-register accounts do not inherit a later register", async () => {
+    const access = await db.userRegisterAccess.findMany({ where: { userId }, select: { registerId: true } });
     expect(access).toHaveLength(1);
     expect(access[0]?.registerId).toBe(registerIds[0]);
     expect(access.some(({ registerId }) => registerId === registerIds[1])).toBe(false);

@@ -16,6 +16,8 @@ model User {
   emailVerified      Boolean              @default(false)
   image              String?
   roleId             String               @db.Uuid
+  registerScopeMode  RegisterScopeMode    @default(SELECTED)
+  registerAccess     UserRegisterAccess[]
   isSiteAdmin        Boolean              @default(false)
   createdAt          DateTime             @default(now())
   updatedAt          DateTime             @updatedAt
@@ -120,6 +122,7 @@ model Role {
   name              String
   normalizedName    String               @unique
   description       String?
+  workspace         String               @default("CUSTOM")
   registerScopeMode RegisterScopeMode    @default(SELECTED)
   createdAt         DateTime             @default(now())
   updatedAt         DateTime             @updatedAt
@@ -151,6 +154,17 @@ model RoleRegisterAccess {
   @@id([roleId, registerId])
   @@index([registerId])
   @@map("role_register_access")
+}
+
+model UserRegisterAccess {
+  userId     String
+  registerId String       @db.Uuid
+  user       User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  register   CashRegister @relation(fields: [registerId], references: [id], onDelete: Cascade)
+
+  @@id([userId, registerId])
+  @@index([registerId])
+  @@map("user_register_access")
 }
 
 model RolePermission {
@@ -328,6 +342,7 @@ model CashRegister {
   customerCreditBills CustomerCreditBill[]
   batches             InventoryBatch[]
   roleAccess          RoleRegisterAccess[]
+  userAccess          UserRegisterAccess[]
   additionalBillCosts AdditionalBillCost[]
 
   @@index([active, name])
