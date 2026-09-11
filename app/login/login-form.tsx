@@ -36,6 +36,7 @@ export function LoginForm() {
 
       navigationStarted = true;
       router.replace("/");
+      router.refresh();
     } catch {
       setError("Unable to reach the authentication service. Please try again.");
     } finally {

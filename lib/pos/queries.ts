@@ -819,7 +819,7 @@ export async function getRegistersData(selectedRegisterId?: string, authorizedId
   };
 }
 
-export async function getRegisterManagementData(registerId: string, receiptId?: string, authorizedIds: readonly string[] | null = null) {
+export async function getRegisterManagementData(registerId: string, receiptId?: string, authorizedIds: readonly string[] | null = null, options: { includeCreditCustomers?: boolean; currentShiftReceiptOnly?: boolean } = {}) {
   assertAuthorizedRegisterFilter(registerId, authorizedIds);
   const registers = await getRegisterSummaries(authorizedIds);
   const register = registers.find((candidate) => candidate.id === registerId) ?? null;
@@ -867,12 +867,13 @@ export async function getRegisterManagementData(registerId: string, receiptId?: 
           },
         })
       : Promise.resolve([]),
-    receiptId
+    receiptId && (!options.currentShiftReceiptOnly || shift)
       ? prisma.sale.findFirst({
           where: {
             id: receiptId,
             status: "COMPLETED",
             registerShift: { registerId },
+            ...(options.currentShiftReceiptOnly ? { registerShiftId: shift!.id } : {}),
           },
           select: {
             id: true,
@@ -914,7 +915,7 @@ export async function getRegisterManagementData(registerId: string, receiptId?: 
           },
         })
       : Promise.resolve([]),
-    getCustomerOptions(),
+    options.includeCreditCustomers === false ? Promise.resolve([]) : getCustomerOptions(),
     prisma.additionalBillCost.findMany({
       where: { registerId },
       orderBy: { name: "asc" },

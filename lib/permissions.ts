@@ -55,7 +55,7 @@ export const CAPABILITY_DEFINITIONS = [
   { key: "SETTINGS_VIEW", label: "View settings", description: "View workspace settings.", group: "Read access", page: "SETTINGS", scope: "GLOBAL", mutation: false },
   { key: "AUDIT_LOG_VIEW_ALL", label: "View global audit log", description: "View all audit events across the site.", group: "Read access", page: "AUDIT_LOG", scope: "GLOBAL", mutation: false },
 
-  { key: "REGISTER_CREATE_GLOBAL", label: "Create registers globally", description: "Create a register. Only roles with all-register scope may receive this capability.", group: "Register administration", page: "REGISTERS", scope: "GLOBAL", mutation: true, implies: "REGISTER_ADMIN_VIEW" },
+  { key: "REGISTER_CREATE_GLOBAL", label: "Create registers globally", description: "Create a register. The account must have all-register access.", group: "Register administration", page: "REGISTERS", scope: "GLOBAL", mutation: true, implies: "REGISTER_ADMIN_VIEW" },
   { key: "REGISTER_RENAME", label: "Rename registers", description: "Change the name of an authorized register.", group: "Register administration", page: "REGISTERS", scope: "REGISTER", mutation: true, implies: "REGISTER_ADMIN_VIEW" },
   { key: "REGISTER_TYPE_CHANGE", label: "Change register type", description: "Change an authorized register between shop and restaurant.", group: "Register administration", page: "REGISTERS", scope: "REGISTER", mutation: true, implies: "REGISTER_ADMIN_VIEW" },
   { key: "REGISTER_ARCHIVE", label: "Archive or restore registers", description: "Change active status for an authorized register.", group: "Register administration", page: "REGISTERS", scope: "REGISTER", mutation: true, implies: "REGISTER_ADMIN_VIEW" },
@@ -66,7 +66,7 @@ export const CAPABILITY_DEFINITIONS = [
   { key: "SHIFT_OVERRIDE", label: "Override shift ownership", description: "Operate another user's shift when the underlying action is also granted.", group: "Shift operations", page: "REGISTERS", scope: "REGISTER", mutation: true, implies: "REGISTERS_VIEW" },
 
   { key: "SALE_RECORD", label: "Record sales", description: "Charge and record sales in owned shifts.", group: "Transactions", page: "REGISTERS", scope: "REGISTER", mutation: true, implies: "REGISTERS_VIEW" },
-  { key: "ORDER_HOLD", label: "Physically hold bills", description: "Temporarily hold a bill without moving stock.", group: "Transactions", page: "REGISTERS", scope: "REGISTER", mutation: true, implies: "REGISTERS_VIEW" },
+  { key: "ORDER_HOLD", label: "Hold bills", description: "Temporarily hold a bill without moving stock.", group: "Transactions", page: "REGISTERS", scope: "REGISTER", mutation: true, implies: "REGISTERS_VIEW" },
   { key: "ORDER_CANCEL", label: "Cancel held bills", description: "Cancel held bills in an owned shift.", group: "Transactions", page: "REGISTERS", scope: "REGISTER", mutation: true, implies: "REGISTERS_VIEW" },
   { key: "CUSTOMER_CREDIT_ISSUE", label: "Issue customer credit", description: "Place a bill on customer credit after checking the limit.", group: "Transactions", page: "CUSTOMERS", scope: "REGISTER", mutation: true, implies: "CUSTOMER_CREDIT_VIEW" },
 

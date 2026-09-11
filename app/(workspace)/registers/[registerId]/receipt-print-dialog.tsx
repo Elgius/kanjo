@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 
 import { printBill, PrintableBill, PrintableBillPortal, type PrintableBillProps } from "@/components/pos/printable-bill";
 import type { BillStatus } from "@/generated/prisma/enums";
@@ -40,6 +40,7 @@ export function ReceiptPrintDialog({
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const router = useRouter();
+  const pathname = usePathname();
 
   useEffect(() => {
     dialogRef.current?.showModal();
@@ -47,7 +48,7 @@ export function ReceiptPrintDialog({
 
   function close() {
     dialogRef.current?.close();
-    router.replace(`/registers/${registerId}`, { scroll: false });
+    router.replace(pathname.startsWith("/live_register/") ? `/live_register/${registerId}` : `/registers/${registerId}`, { scroll: false });
   }
 
   const createdAt = new Intl.DateTimeFormat("en-GB", {
